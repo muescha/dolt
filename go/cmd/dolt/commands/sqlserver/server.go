@@ -120,11 +120,15 @@ func Serve(
 		}
 	}
 
-	serverConf, sErr, cErr := getConfigFromServerConfig(serverConfig)
+	serverConf, shutdownTLS, sErr, cErr := getConfigFromServerConfig(serverConfig)
 	if cErr != nil {
 		return nil, cErr
 	} else if sErr != nil {
 		return sErr, nil
+	}
+
+	if shutdownTLS != nil {
+		defer shutdownTLS()
 	}
 
 	// Create SQL Engine with users
@@ -281,10 +285,10 @@ func newSessionBuilder(se *engine.SqlEngine, config ServerConfig) server.Session
 }
 
 // getConfigFromServerConfig processes ServerConfig and returns server.Config for sql-server.
-func getConfigFromServerConfig(serverConfig ServerConfig) (server.Config, error, error) {
+func getConfigFromServerConfig(serverConfig ServerConfig) (server.Config, ShutdownHook, error, error) {
 	serverConf, err := handleProtocolAndAddress(serverConfig)
 	if err != nil {
-		return server.Config{}, err, nil
+		return server.Config{}, nil, err, nil
 	}
 
 	serverConf.DisableClientMultiStatements = serverConfig.DisableClientMultiStatements()
@@ -292,9 +296,9 @@ func getConfigFromServerConfig(serverConfig ServerConfig) (server.Config, error,
 	readTimeout := time.Duration(serverConfig.ReadTimeout()) * time.Millisecond
 	writeTimeout := time.Duration(serverConfig.WriteTimeout()) * time.Millisecond
 
-	tlsConfig, err := LoadTLSConfig(serverConfig)
+	tlsConfig, shutdownTLS, err := LoadTLSConfig(serverConfig)
 	if err != nil {
-		return server.Config{}, nil, err
+		return server.Config{}, nil, nil, err
 	}
 
 	// if persist is 'load' we use currently set persisted global variable,
@@ -302,12 +306,12 @@ func getConfigFromServerConfig(serverConfig ServerConfig) (server.Config, error,
 	if serverConfig.PersistenceBehavior() == loadPerisistentGlobals {
 		serverConf, err = serverConf.NewConfig()
 		if err != nil {
-			return server.Config{}, err, nil
+			return server.Config{}, nil, err, nil
 		}
 	} else {
 		err = sql.SystemVariables.SetGlobal("max_connections", serverConfig.MaxConnections())
 		if err != nil {
-			return server.Config{}, err, nil
+			return server.Config{}, nil, err, nil
 		}
 	}
 
@@ -319,7 +323,7 @@ func getConfigFromServerConfig(serverConfig ServerConfig) (server.Config, error,
 	serverConf.TLSConfig = tlsConfig
 	serverConf.RequireSecureTransport = serverConfig.RequireSecureTransport()
 
-	return serverConf, nil, nil
+	return serverConf, shutdownTLS, nil, nil
 }
 
 // handleProtocolAndAddress returns new server.Config object with only Protocol and Address defined.

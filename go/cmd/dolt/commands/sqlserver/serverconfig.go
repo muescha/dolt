@@ -15,10 +15,14 @@
 package sqlserver
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/commands/engine"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
@@ -473,19 +477,63 @@ func ConfigInfo(config ServerConfig) string {
 		config.ReadTimeout(), config.ReadOnly(), config.LogLevel(), socket)
 }
 
+type ShutdownHook func() error
+
 // LoadTLSConfig loads the certificate chain from config.TLSKey() and config.TLSCert() and returns
 // a *tls.Config configured for its use. Returns `nil` if key and cert are `""`.
-func LoadTLSConfig(cfg ServerConfig) (*tls.Config, error) {
-	if cfg.TLSKey() == "" && cfg.TLSCert() == "" {
-		return nil, nil
+//
+// ShutdownHook can be called to cleanly shutdown any background work involved
+// in maintaining the *tls.Config.
+func LoadTLSConfig(cfg ServerConfig) (*tls.Config, ShutdownHook, error) {
+	keypath := cfg.TLSKey()
+	certpath := cfg.TLSCert()
+	if keypath == "" && certpath == "" {
+		return nil, nil, nil
 	}
-	c, err := tls.LoadX509KeyPair(cfg.TLSCert(), cfg.TLSKey())
+
+	c, err := tls.LoadX509KeyPair(certpath, keypath)
 	if err != nil {
-		return nil, err
+		// If the initial load fails, we return an error.
+		return nil, nil, err
 	}
+
+	var cert atomic.Value
+	cert.Store(&c)
+
+	reloadCertificates := func() {
+		c, err := tls.LoadX509KeyPair(certpath, keypath)
+		if err != nil {
+			fmt.Printf("error reloading tls certificates: %v; will try again.", err)
+		} else {
+			cert.Store(&c)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(1 * time.Minute):
+				reloadCertificates()
+			}
+		}
+	}()
+
+	shutdown := func() error {
+		cancel()
+		wg.Wait()
+		return nil
+	}
+
 	return &tls.Config{
-		Certificates: []tls.Certificate{
-			c,
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return cert.Load().(*tls.Certificate), nil
 		},
-	}, nil
+	}, shutdown,
+	nil
 }

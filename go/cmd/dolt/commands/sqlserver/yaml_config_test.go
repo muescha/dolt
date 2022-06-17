@@ -16,6 +16,7 @@ package sqlserver
 
 import (
 	"testing"
+	"crypto/x509"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -205,9 +206,10 @@ func TestYAMLConfigDefaults(t *testing.T) {
 	assert.Nil(t, cfg.MetricsConfig.Labels)
 	assert.Equal(t, defaultAllowCleartextPasswords, cfg.AllowCleartextPasswords())
 
-	c, err := LoadTLSConfig(cfg)
+	c, s, err := LoadTLSConfig(cfg)
 	assert.NoError(t, err)
 	assert.Nil(t, c)
+	assert.Nil(t, s)
 }
 
 func TestYAMLConfigTLS(t *testing.T) {
@@ -219,11 +221,17 @@ listener:
 `), &cfg)
 	require.NoError(t, err)
 
-	c, err := LoadTLSConfig(cfg)
+	c, s, err := LoadTLSConfig(cfg)
 	assert.NoError(t, err)
 	assert.NotNil(t, c)
-	assert.Len(t, c.Certificates, 1)
-	assert.Len(t, c.Certificates[0].Certificate, 1)
+	assert.NotNil(t, s)
+	assert.NotNil(t, c.GetCertificate)
+	cert, err := c.GetCertificate(nil)
+	assert.NoError(t, err)
+	assert.Len(t, cert.Certificate, 1)
+	_, err = x509.ParseCertificate(cert.Certificate[0])
+	assert.NoError(t, err)
+	assert.NoError(t, s())
 
 	err = yaml.Unmarshal([]byte(`
 listener:
@@ -232,11 +240,18 @@ listener:
 `), &cfg)
 	require.NoError(t, err)
 
-	c, err = LoadTLSConfig(cfg)
+	c, s, err = LoadTLSConfig(cfg)
 	assert.NoError(t, err)
 	assert.NotNil(t, c)
-	assert.Len(t, c.Certificates, 1)
-	assert.Len(t, c.Certificates[0].Certificate, 1)
+	assert.NotNil(t, s)
+	assert.NotNil(t, c.GetCertificate)
+	cert, err = c.GetCertificate(nil)
+	assert.NoError(t, err)
+	// TODO: chain_cert.pem should have intermediate certs...
+	assert.Len(t, cert.Certificate, 1)
+	_, err = x509.ParseCertificate(cert.Certificate[0])
+	assert.NoError(t, err)
+	assert.NoError(t, s())
 
 	cfg = YAMLConfig{}
 	err = yaml.Unmarshal([]byte(`
@@ -244,8 +259,10 @@ listener:
   tls_key: testdata/chain_key.pem
 `), &cfg)
 	require.NoError(t, err)
-	c, err = LoadTLSConfig(cfg)
+	c, s, err = LoadTLSConfig(cfg)
 	assert.Error(t, err)
+	assert.Nil(t, c)
+	assert.Nil(t, s)
 
 	cfg = YAMLConfig{}
 	err = yaml.Unmarshal([]byte(`
@@ -253,7 +270,7 @@ listener:
   tls_cert: testdata/chain_cert.pem
 `), &cfg)
 	require.NoError(t, err)
-	c, err = LoadTLSConfig(cfg)
+	c, s, err = LoadTLSConfig(cfg)
 	assert.Error(t, err)
 
 	cfg = YAMLConfig{}
@@ -263,7 +280,7 @@ listener:
   tls_key: testdata/doesnotexist_key.pem
 `), &cfg)
 	require.NoError(t, err)
-	c, err = LoadTLSConfig(cfg)
+	c, s, err = LoadTLSConfig(cfg)
 	assert.Error(t, err)
 
 	cfg = YAMLConfig{}
