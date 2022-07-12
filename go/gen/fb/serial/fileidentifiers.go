@@ -28,6 +28,9 @@ const RootValueFileID = "RTVL"
 const TableFileID = "DTBL"
 const ProllyTreeNodeFileID = "TUPM"
 const AddressMapFileID = "ADRM"
+const CommitClosureFileID = "CMCL"
+const TableSchemaFileID = "DSCH"
+const ForeignKeyCollectionFileID = "DFKC"
 
 func GetFileID(bs []byte) string {
 	if len(bs) < 8 {

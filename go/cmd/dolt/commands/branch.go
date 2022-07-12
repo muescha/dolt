@@ -17,7 +17,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 
@@ -83,10 +82,9 @@ func (cmd BranchCmd) Description() string {
 	return "Create, list, edit, delete branches."
 }
 
-// CreateMarkdown creates a markdown file containing the helptext for the command at the given path
-func (cmd BranchCmd) CreateMarkdown(wr io.Writer, commandStr string) error {
+func (cmd BranchCmd) Docs() *cli.CommandDocumentation {
 	ap := cmd.ArgParser()
-	return CreateMarkdown(wr, cli.GetCommandDocumentation(commandStr, branchDocs, ap))
+	return cli.NewCommandDocumentation(branchDocs, ap)
 }
 
 func (cmd BranchCmd) ArgParser() *argparser.ArgParser {
@@ -102,6 +100,7 @@ func (cmd BranchCmd) ArgParser() *argparser.ArgParser {
 	ap.SupportsFlag(allFlag, "a", "When in list mode, shows remote tracked branches")
 	ap.SupportsFlag(remoteFlag, "r", "When in list mode, show only remote tracked branches. When with -d, delete a remote tracking branch.")
 	ap.SupportsFlag(showCurrentFlag, "", "Print the name of the current branch")
+	ap.SupportsString(cli.TrackFlag, "t", "", "When creating a new branch, set up 'upstream' configuration.")
 	return ap
 }
 
@@ -113,7 +112,7 @@ func (cmd BranchCmd) EventType() eventsapi.ClientEventType {
 // Exec executes the command
 func (cmd BranchCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cmd.ArgParser()
-	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, branchDocs, ap))
+	help, usage := cli.HelpAndUsagePrinters(cli.CommandDocsForCommandString(commandStr, branchDocs, ap))
 	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	switch {
@@ -313,16 +312,50 @@ func createBranch(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPars
 		return 1
 	}
 
+	var remote string
+	var remoteBranch string
 	newBranch := apr.Arg(0)
 	startPt := "head"
-
 	if apr.NArg() == 2 {
 		startPt = apr.Arg(1)
+	}
+
+	trackVal, setTrackUpstream := apr.GetValue(cli.TrackFlag)
+	if setTrackUpstream {
+		if trackVal == "inherit" {
+			return HandleVErrAndExitCode(errhand.BuildDError("--track='inherit' is not supported yet").Build(), usage)
+		} else if trackVal == "direct" && apr.NArg() != 2 {
+			return HandleVErrAndExitCode(errhand.BuildDError("invalid arguments").Build(), usage)
+		}
+		if apr.NArg() == 2 {
+			newBranch = apr.Arg(0)
+			startPt = apr.Arg(1)
+		} else {
+			// if track option is defined with no value, the branch name is taken as track value
+			newBranch = trackVal
+			startPt = apr.Arg(0)
+		}
+		remote, remoteBranch = ParseRemoteBranchName(startPt)
+		remotes, err := dEnv.RepoStateReader().GetRemotes()
+		if err != nil {
+			return HandleVErrAndExitCode(errhand.BuildDError(err.Error()).Build(), usage)
+		}
+		_, remoteOk := remotes[remote]
+		if !remoteOk {
+			return HandleVErrAndExitCode(errhand.BuildDError("'%s' is not a valid remote ref and a branch '%s' cannot be created from it", startPt, newBranch).Build(), usage)
+		}
 	}
 
 	err := actions.CreateBranchWithStartPt(ctx, dEnv.DbData(), newBranch, startPt, apr.Contains(forceFlag))
 	if err != nil {
 		return HandleVErrAndExitCode(errhand.BuildDError(err.Error()).Build(), usage)
+	}
+
+	if setTrackUpstream {
+		// at this point new branch is created
+		branchRef := ref.NewBranchRef(newBranch)
+		verr := SetRemoteUpstreamForBranchRef(dEnv, remote, remoteBranch, branchRef)
+		return HandleVErrAndExitCode(verr, usage)
 	}
 
 	return 0

@@ -37,16 +37,16 @@ type ParquetWriter struct {
 }
 
 var typeMap = map[typeinfo.Identifier]string{
-	typeinfo.DatetimeTypeIdentifier:   "type=INT64, convertedtype=TIME_MICROS",
-	typeinfo.DecimalTypeIdentifier:    "type=BYTE_ARRAY, convertedtype=DECIMAL, scale=2, precision=20",
+	typeinfo.DatetimeTypeIdentifier:   "type=INT64, convertedtype=TIMESTAMP_MICROS",
+	typeinfo.DecimalTypeIdentifier:    "type=BYTE_ARRAY, convertedtype=UTF8",
 	typeinfo.EnumTypeIdentifier:       "type=BYTE_ARRAY, convertedtype=UTF8",
 	typeinfo.InlineBlobTypeIdentifier: "type=BYTE_ARRAY, convertedtype=UTF8",
 	typeinfo.SetTypeIdentifier:        "type=BYTE_ARRAY, convertedtype=UTF8",
-	typeinfo.TimeTypeIdentifier:       "type=INT64, convertedtype=TIME_MICROS",
+	typeinfo.TimeTypeIdentifier:       "type=INT64, convertedtype=TIMESPAN",
 	typeinfo.TupleTypeIdentifier:      "type=BYTE_ARRAY, convertedtype=UTF8",
 	typeinfo.UuidTypeIdentifier:       "type=BYTE_ARRAY, convertedtype=UTF8",
 	typeinfo.VarBinaryTypeIdentifier:  "type=BYTE_ARRAY, convertedtype=UTF8",
-	typeinfo.YearTypeIdentifier:       "type=INT32, convertedtype=DATE",
+	typeinfo.YearTypeIdentifier:       "type=INT32, convertedtype=INT_32",
 	typeinfo.UnknownTypeIdentifier:    "type=BYTE_ARRAY, convertedtype=UTF8",
 	typeinfo.JSONTypeIdentifier:       "type=BYTE_ARRAY, convertedtype=UTF8",
 	typeinfo.BlobStringTypeIdentifier: "type=BYTE_ARRAY, convertedtype=UTF8",
@@ -95,39 +95,11 @@ func (pwr *ParquetWriter) GetSchema() schema.Schema {
 
 // WriteRow will write a row to a table
 func (pwr *ParquetWriter) WriteRow(ctx context.Context, r row.Row) error {
-	colValStrs := make([]*string, pwr.sch.GetAllCols().Size())
-
 	sqlRow, err := sqlutil.DoltRowToSqlRow(r, pwr.GetSchema())
 	if err != nil {
 		return err
 	}
-
-	for i, val := range sqlRow {
-		colT := pwr.sch.GetAllCols().GetByIndex(i)
-		if val == nil {
-			colValStrs[i] = nil
-		} else {
-			// convert datetime and time types to int64
-			switch colT.TypeInfo.GetTypeIdentifier() {
-			case typeinfo.DatetimeTypeIdentifier:
-				val = val.(time.Time).Unix()
-			case typeinfo.TimeTypeIdentifier:
-				colVal, ok := r.GetColVal(colT.Tag)
-				if !ok {
-					return fmt.Errorf("error: could not get column value for timeType value")
-				}
-				val = colVal
-			}
-			v := sqlutil.SqlColToStr(ctx, val)
-			colValStrs[i] = &v
-		}
-	}
-
-	err = pwr.pwriter.WriteString(colValStrs)
-	if err != nil {
-		return err
-	}
-	return nil
+	return pwr.WriteSqlRow(ctx, sqlRow)
 }
 
 func (pwr *ParquetWriter) WriteSqlRow(ctx context.Context, r sql.Row) error {
@@ -138,18 +110,22 @@ func (pwr *ParquetWriter) WriteSqlRow(ctx context.Context, r sql.Row) error {
 		if val == nil {
 			colValStrs[i] = nil
 		} else {
+			sqlType := colT.TypeInfo.ToSqlType()
 			// convert datetime and time types to int64
 			switch colT.TypeInfo.GetTypeIdentifier() {
 			case typeinfo.DatetimeTypeIdentifier:
-				val = val.(time.Time).Unix()
+				val = val.(time.Time).UnixMicro()
+				sqlType = sql.Int64
 			case typeinfo.TimeTypeIdentifier:
-				colVal, err := sql.Time.Marshal(val)
-				if err != nil {
-					return err
-				}
-				val = colVal
+				val = int64(val.(sql.Timespan).AsTimeDuration())
+				sqlType = sql.Int64
+			case typeinfo.BitTypeIdentifier:
+				sqlType = sql.Uint64
 			}
-			v := sqlutil.SqlColToStr(ctx, val)
+			v, err := sqlutil.SqlColToStr(sqlType, val)
+			if err != nil {
+				return err
+			}
 			colValStrs[i] = &v
 		}
 	}

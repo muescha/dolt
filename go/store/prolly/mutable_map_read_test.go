@@ -104,6 +104,14 @@ func TestMutableMapReads(t *testing.T) {
 	}
 }
 
+func TestMutableMapFormat(t *testing.T) {
+	ctx := context.Background()
+	mutableMap, _ := makeMutableMap(t, 100)
+	s, err := debugFormat(ctx, mutableMap.(MutableMap))
+	assert.NoError(t, err)
+	assert.NotEmpty(t, s)
+}
+
 func makeMutableMap(t *testing.T, count int) (testMap, [][2]val.Tuple) {
 	ctx := context.Background()
 	ns := tree.NewTestNodeStore()
@@ -117,7 +125,7 @@ func makeMutableMap(t *testing.T, count int) (testMap, [][2]val.Tuple) {
 		val.Type{Enc: val.Uint32Enc, Nullable: true},
 	)
 
-	tuples := tree.RandomTuplePairs(count, kd, vd)
+	tuples := tree.RandomTuplePairs(count, kd, vd, ns)
 	// 2/3 of tuples in Map
 	// 1/3 of tuples in memoryMap
 	clone := tree.CloneRandomTuples(tuples)

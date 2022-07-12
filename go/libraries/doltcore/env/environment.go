@@ -55,6 +55,8 @@ const (
 	DefaultRemotesApiPort = "443"
 
 	tempTablesDir = "temptf"
+
+	ServerLockFile = "sql-server.lock"
 )
 
 var zeroHashStr = (hash.Hash{}).String()
@@ -698,13 +700,16 @@ func (dEnv *DoltEnv) DocsReadWriter() DocsReadWriter {
 }
 
 func (dEnv *DoltEnv) HeadRoot(ctx context.Context) (*doltdb.RootValue, error) {
-	commit, err := dEnv.DoltDB.ResolveCommitRef(ctx, dEnv.RepoState.CWBHeadRef())
-
+	commit, err := dEnv.HeadCommit(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	return commit.GetRootValue(ctx)
+}
+
+func (dEnv *DoltEnv) HeadCommit(ctx context.Context) (*doltdb.Commit, error) {
+	return dEnv.DoltDB.ResolveCommitRef(ctx, dEnv.RepoState.CWBHeadRef())
 }
 
 func (dEnv *DoltEnv) DbData() DbData {
@@ -1275,4 +1280,28 @@ func (dEnv *DoltEnv) DbEaFactory() editor.DbEaFactory {
 
 func (dEnv *DoltEnv) BulkDbEaFactory() editor.DbEaFactory {
 	return editor.NewBulkImportTEAFactory(dEnv.DoltDB.Format(), dEnv.DoltDB.ValueReadWriter(), dEnv.TempTableFilesDir())
+}
+
+func (dEnv *DoltEnv) LockFile() string {
+	f, _ := dEnv.FS.Abs(filepath.Join(dbfactory.DoltDir, ServerLockFile))
+	return f
+}
+
+// IsLocked returns true if this database's lockfile exists
+func (dEnv *DoltEnv) IsLocked() bool {
+	ok, _ := dEnv.FS.Exists(dEnv.LockFile())
+	return ok
+}
+
+// Lock writes this database's lockfile or errors if it already exists
+func (dEnv *DoltEnv) Lock() error {
+	if dEnv.IsLocked() {
+		return ErrActiveServerLock.New(dEnv.LockFile())
+	}
+	return dEnv.FS.WriteFile(dEnv.LockFile(), []byte{})
+}
+
+// Unlock deletes this database's lockfile
+func (dEnv *DoltEnv) Unlock() error {
+	return dEnv.FS.DeleteFile(dEnv.LockFile())
 }

@@ -19,11 +19,11 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dolthub/dolt/go/store/prolly/message"
-
 	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/prolly/message"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/skip"
+	"github.com/dolthub/dolt/go/store/val"
 )
 
 type KeyValueFn[K, V ~[]byte] func(key K, value V) error
@@ -71,9 +71,10 @@ func mergeOrderedTrees[K, V ~[]byte, O ordering[K], S message.Serializer](
 	l, r, base orderedTree[K, V, O],
 	cb tree.CollisionFn,
 	serializer S,
+	valDesc val.TupleDesc,
 ) (orderedTree[K, V, O], error) {
 	cfn := base.compareItems
-	root, err := tree.ThreeWayMerge(ctx, base.ns, l.root, r.root, base.root, cfn, cb, serializer)
+	root, err := tree.ThreeWayMerge(ctx, base.ns, l.root, r.root, base.root, cfn, cb, serializer, valDesc)
 	if err != nil {
 		return orderedTree[K, V, O]{}, err
 	}
@@ -170,11 +171,43 @@ func (t orderedTree[K, V, O]) iterAll(ctx context.Context) (*orderedTreeIter[K, 
 		return nil, err
 	}
 
-	if c.Compare(s) >= 0 {
-		c = nil // empty range
+	stop := func(curr *tree.Cursor) bool {
+		return curr.Compare(s) >= 0
 	}
 
-	return &orderedTreeIter[K, V]{curr: c, stop: s}, nil
+	if stop(c) {
+		// empty range
+		return &orderedTreeIter[K, V]{curr: nil}, nil
+	}
+
+	return &orderedTreeIter[K, V]{curr: c, stop: stop, step: c.Advance}, nil
+}
+
+func (t orderedTree[K, V, O]) iterAllReverse(ctx context.Context) (*orderedTreeIter[K, V], error) {
+	beginning, err := tree.NewCursorAtStart(ctx, t.ns, t.root)
+	if err != nil {
+		return nil, err
+	}
+	err = beginning.Retreat(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	end, err := tree.NewCursorAtEnd(ctx, t.ns, t.root)
+	if err != nil {
+		return nil, err
+	}
+
+	stop := func(curr *tree.Cursor) bool {
+		return curr.Compare(beginning) <= 0
+	}
+
+	if stop(end) {
+		// empty range
+		return &orderedTreeIter[K, V]{curr: nil}, nil
+	}
+
+	return &orderedTreeIter[K, V]{curr: end, stop: stop, step: end.Retreat}, nil
 }
 
 func (t orderedTree[K, V, O]) iterOrdinalRange(ctx context.Context, start, stop uint64) (*orderedTreeIter[K, V], error) {
@@ -197,7 +230,11 @@ func (t orderedTree[K, V, O]) iterOrdinalRange(ctx context.Context, start, stop 
 		return nil, err
 	}
 
-	return &orderedTreeIter[K, V]{curr: lo, stop: hi}, nil
+	stopF := func(curr *tree.Cursor) bool {
+		return curr.Compare(hi) >= 0
+	}
+
+	return &orderedTreeIter[K, V]{curr: lo, stop: stopF, step: lo.Advance}, nil
 }
 
 // searchNode returns the smallest index where nd[i] >= query
@@ -232,8 +269,11 @@ var _ tree.CompareFn = orderedTree[tree.Item, tree.Item, ordering[tree.Item]]{}.
 type orderedTreeIter[K, V ~[]byte] struct {
 	// current tuple location
 	curr *tree.Cursor
-	// non-inclusive range stop
-	stop *tree.Cursor
+
+	// the function called to moved |curr| forward in the direction of iteration.
+	step func(context.Context) error
+	// should return |true| if the passed in cursor is past the iteration's stopping point.
+	stop func(*tree.Cursor) bool
 }
 
 func (it *orderedTreeIter[K, V]) Next(ctx context.Context) (key K, value V, err error) {
@@ -244,11 +284,11 @@ func (it *orderedTreeIter[K, V]) Next(ctx context.Context) (key K, value V, err 
 	k, v := tree.CurrentCursorItems(it.curr)
 	key, value = K(k), V(v)
 
-	err = it.curr.Advance(ctx)
+	err = it.step(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	if it.curr.Compare(it.stop) >= 0 {
+	if it.stop(it.curr) {
 		// past the end of the range
 		it.curr = nil
 	}
@@ -266,12 +306,12 @@ func (it *orderedTreeIter[K, V]) current() (key K, value V) {
 }
 
 func (it *orderedTreeIter[K, V]) iterate(ctx context.Context) (err error) {
-	err = it.curr.Advance(ctx)
+	err = it.step(ctx)
 	if err != nil {
 		return err
 	}
 
-	if it.curr.Compare(it.stop) >= 0 {
+	if it.stop(it.curr) {
 		// past the end of the range
 		it.curr = nil
 	}

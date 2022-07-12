@@ -17,11 +17,8 @@ package indexcmds
 import (
 	"context"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
-
-	"github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
@@ -48,11 +45,7 @@ func (cmd LsCmd) Description() string {
 	return "Internal debugging command to display the list of indexes."
 }
 
-func (cmd LsCmd) GatedForNBF(nbf *types.NomsBinFormat) bool {
-	return types.IsFormat_DOLT_1(nbf)
-}
-
-func (cmd LsCmd) CreateMarkdown(_ io.Writer, _ string) error {
+func (cmd LsCmd) Docs() *cli.CommandDocumentation {
 	return nil
 }
 
@@ -64,7 +57,7 @@ func (cmd LsCmd) ArgParser() *argparser.ArgParser {
 
 func (cmd LsCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cmd.ArgParser()
-	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, lsDocs, ap))
+	help, usage := cli.HelpAndUsagePrinters(cli.CommandDocsForCommandString(commandStr, lsDocs, ap))
 	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	if apr.NArg() > 1 {

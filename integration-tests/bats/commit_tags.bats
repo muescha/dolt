@@ -78,12 +78,11 @@ teardown() {
 }
 
 @test "commit_tags: use a tag as ref for diff" {
-    skip_nbf_dolt_1
     dolt tag v1 HEAD^
     run dolt diff v1
     [ $status -eq 0 ]
-    [[ "$output" =~ "-  | 0" ]]
-    [[ "$output" =~ "+  | 3" ]]
+    [[ "$output" =~ "- | 0" ]]
+    [[ "$output" =~ "+ | 3" ]]
 }
 
 @test "commit_tags: use a tag as a ref for merge" {
@@ -103,7 +102,6 @@ teardown() {
 }
 
 @test "commit_tags: push/pull tags to/from a remote" {
-    skip_nbf_dolt_1
     # reset env
     rm -rf .dolt
     mkdir repo remote

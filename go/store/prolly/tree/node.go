@@ -27,10 +27,13 @@ import (
 
 type Item []byte
 
+type subtreeCounts []uint64
+
 type Node struct {
 	// keys and values contain sub-slices of |msg|,
 	// allowing faster lookups by avoiding the vtable
 	keys, values val.SlicedBuffer
+	subtrees     subtreeCounts
 	count        uint16
 	msg          message.Message
 }
@@ -41,6 +44,10 @@ func WalkAddresses(ctx context.Context, nd Node, ns NodeStore, cb AddressCb) err
 	return walkAddresses(ctx, nd, func(ctx context.Context, addr hash.Hash) error {
 		if err := cb(ctx, addr); err != nil {
 			return err
+		}
+
+		if nd.IsLeaf() {
+			return nil
 		}
 
 		child, err := ns.Read(ctx, addr)
@@ -54,7 +61,29 @@ func WalkAddresses(ctx context.Context, nd Node, ns NodeStore, cb AddressCb) err
 
 type NodeCb func(ctx context.Context, nd Node) error
 
+// WalkNodes runs a callback function on every node found in the DFS of |nd|
+// that is of the same message type as |nd|.
 func WalkNodes(ctx context.Context, nd Node, ns NodeStore, cb NodeCb) error {
+	if err := cb(ctx, nd); err != nil {
+		return err
+	}
+
+	if nd.IsLeaf() {
+		return nil
+	}
+
+	return walkAddresses(ctx, nd, func(ctx context.Context, addr hash.Hash) error {
+		child, err := ns.Read(ctx, addr)
+		if err != nil {
+			return err
+		}
+		return WalkNodes(ctx, child, ns, cb)
+	})
+}
+
+// walkOpaqueNodes runs a callback function on every node found in the DFS of |nd|
+// including nested trees.
+func walkOpaqueNodes(ctx context.Context, nd Node, ns NodeStore, cb NodeCb) error {
 	if err := cb(ctx, nd); err != nil {
 		return err
 	}
@@ -114,14 +143,22 @@ func (nd Node) getValue(i int) Item {
 	return nd.values.GetSlice(i)
 }
 
+func (nd *Node) getSubtreeCount(i int) uint64 {
+	if nd.IsLeaf() {
+		return 1
+	}
+	if nd.subtrees == nil {
+		// deserializing subtree counts requires a
+		// malloc, so we lazily load them here
+		nd.subtrees = message.GetSubtrees(nd.msg)
+	}
+	return nd.subtrees[i]
+}
+
 // getAddress returns the |ith| address of this node.
 // This method assumes values are 20-byte address hashes.
 func (nd Node) getAddress(i int) hash.Hash {
 	return hash.New(nd.getValue(i))
-}
-
-func (nd Node) getSubtreeCounts() SubtreeCounts {
-	return message.GetSubtrees(nd.msg)
 }
 
 func (nd Node) empty() bool {

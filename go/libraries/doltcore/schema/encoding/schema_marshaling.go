@@ -332,6 +332,10 @@ func MarshalSchemaAsNomsValue(ctx context.Context, vrw types.ValueReadWriter, sc
 		return nil, err
 	}
 
+	if vrw.Format().UsesFlatbuffers() {
+		return SerializeSchema(ctx, vrw, sch)
+	}
+
 	sd, err := toSchemaData(sch)
 
 	if err != nil {
@@ -384,8 +388,15 @@ func UnmarshalSchemaNomsValue(ctx context.Context, nbf *types.NomsBinFormat, sch
 	}
 
 	var sd schemaData
-	err = marshal.Unmarshal(ctx, nbf, schemaVal, &sd)
-
+	if nbf.UsesFlatbuffers() {
+		sch, err := DeserializeSchema(ctx, nbf, schemaVal)
+		if err != nil {
+			return nil, err
+		}
+		sd, err = toSchemaData(sch)
+	} else {
+		err = marshal.Unmarshal(ctx, nbf, schemaVal, &sd)
+	}
 	if err != nil {
 		return nil, err
 	}

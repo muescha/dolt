@@ -66,11 +66,7 @@ func ProceduresTableSchema() schema.Schema {
 // DoltProceduresGetOrCreateTable returns the `dolt_procedures` table from the given db, creating it in the db's
 // current root if it doesn't exist
 func DoltProceduresGetOrCreateTable(ctx *sql.Context, db Database) (*WritableDoltTable, error) {
-	root, err := db.GetRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	tbl, found, err := db.GetTableInsensitiveWithRoot(ctx, root, doltdb.ProceduresTableName)
+	tbl, found, err := db.GetTableInsensitive(ctx, doltdb.ProceduresTableName)
 	if err != nil {
 		return nil, err
 	}
@@ -78,15 +74,16 @@ func DoltProceduresGetOrCreateTable(ctx *sql.Context, db Database) (*WritableDol
 		return tbl.(*WritableDoltTable), nil
 	}
 
+	root, err := db.GetRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
 	err = db.createDoltTable(ctx, doltdb.ProceduresTableName, root, ProceduresTableSchema())
 	if err != nil {
 		return nil, err
 	}
-	root, err = db.GetRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	tbl, found, err = db.GetTableInsensitiveWithRoot(ctx, root, doltdb.ProceduresTableName)
+
+	tbl, found, err = db.GetTableInsensitive(ctx, doltdb.ProceduresTableName)
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +96,7 @@ func DoltProceduresGetOrCreateTable(ctx *sql.Context, db Database) (*WritableDol
 
 // DoltProceduresGetTable returns the `dolt_procedures` table from the given db, or nil if the table doesn't exist
 func DoltProceduresGetTable(ctx *sql.Context, db Database) (*WritableDoltTable, error) {
-	root, err := db.GetRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	tbl, found, err := db.GetTableInsensitiveWithRoot(ctx, root, doltdb.ProceduresTableName)
+	tbl, found, err := db.GetTableInsensitive(ctx, doltdb.ProceduresTableName)
 	if err != nil {
 		return nil, err
 	}
@@ -141,12 +134,7 @@ func DoltProceduresGetAll(ctx *sql.Context, db Database) ([]sql.StoredProcedureD
 		return nil, err
 	}
 
-	dt, err := tbl.doltTable(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	iter, err := index.RowIterForIndexLookup(ctx, dt, lookup, tbl.sqlSch, nil)
+	iter, err := index.RowIterForIndexLookup(ctx, tbl.DoltTable, lookup, tbl.sqlSch, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -270,12 +258,7 @@ func DoltProceduresGetDetails(ctx *sql.Context, tbl *WritableDoltTable, name str
 		return sql.StoredProcedureDetails{}, false, err
 	}
 
-	dt, err := tbl.doltTable(ctx)
-	if err != nil {
-		return sql.StoredProcedureDetails{}, false, err
-	}
-
-	rowIter, err := index.RowIterForIndexLookup(ctx, dt, indexLookup, tbl.sqlSch, nil)
+	rowIter, err := index.RowIterForIndexLookup(ctx, tbl.DoltTable, indexLookup, tbl.sqlSch, nil)
 	if err != nil {
 		return sql.StoredProcedureDetails{}, false, err
 	}

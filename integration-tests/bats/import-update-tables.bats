@@ -37,7 +37,7 @@ DELIM
 
     cat <<SQL > employees-sch.sql
 CREATE TABLE employees (
-  \`id\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`id\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first name\` LONGTEXT COMMENT 'tag:1',
   \`last name\` LONGTEXT COMMENT 'tag:2',
   \`title\` LONGTEXT COMMENT 'tag:3',
@@ -118,6 +118,8 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Rows Processed: 2, Additions: 2, Modifications: 0, Had No Effect: 0" ]] || false
     [[ "$output" =~ "Import completed successfully." ]] || false
+    # Sanity check
+    ! [[ "$output" =~ "Warning: There are fewer columns in the import file's schema than the table's schema" ]] || false
 
     # Validate that a successful import with no bad rows does not print the following
     ! [[ "$output" =~ "The following rows were skipped:" ]] || false
@@ -156,7 +158,7 @@ teardown() {
 @test "import-update-tables: update table using csv with newlines" {
     dolt sql <<SQL
 CREATE TABLE test (
-  pk LONGTEXT NOT NULL COMMENT 'tag:0',
+  pk varchar(20) NOT NULL COMMENT 'tag:0',
   c1 LONGTEXT COMMENT 'tag:1',
   c2 LONGTEXT COMMENT 'tag:2',
   c3 LONGTEXT COMMENT 'tag:3',
@@ -180,7 +182,7 @@ SQL
 @test "import-update-tables: update table using wrong json" {
     dolt sql <<SQL
 CREATE TABLE employees (
-  \`idz\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`idz\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first namez\` LONGTEXT COMMENT 'tag:1',
   \`last namez\` LONGTEXT COMMENT 'tag:2',
   \`titlez\` LONGTEXT COMMENT 'tag:3',
@@ -219,7 +221,7 @@ SQL
 @test "import-update-tables: update table with a json with columns in different order" {
     dolt sql <<SQL
 CREATE TABLE employees (
-  \`id\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`id\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first name\` LONGTEXT COMMENT 'tag:1',
   \`last name\` LONGTEXT COMMENT 'tag:2',
   \`title\` LONGTEXT COMMENT 'tag:3',
@@ -245,7 +247,7 @@ SQL
 @test "import-update-tables: update table with a csv with columns in different order" {
     dolt sql <<SQL
 CREATE TABLE employees (
-  \`id\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`id\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first name\` LONGTEXT COMMENT 'tag:1',
   \`last name\` LONGTEXT COMMENT 'tag:2',
   \`title\` LONGTEXT COMMENT 'tag:3',
@@ -348,7 +350,7 @@ DELIM
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Modifications: 3" ]] || falsa
 
-    skip_nbf_dolt_1
+
     run dolt diff
     [ "$status" -eq 0 ]
     [ "${#lines[@]}" -eq 0 ]
@@ -436,7 +438,6 @@ DELIM
     dolt add .
     dolt commit --allow-empty -m "update table from parquet file"
 
-    skip_nbf_dolt_1
     run dolt diff --summary main new_branch
     [ "$status" -eq 0 ]
     [[ "$output" = "" ]] || false
@@ -553,6 +554,7 @@ DELIM
 
     run dolt table import -u test 1pk5col-ints-updt.csv
     [ "$status" -eq 0 ]
+    [[ "$output" =~ "Warning: There are fewer columns in the import file's schema than the table's schema" ]] || false
     [[ "$output" =~ "Rows Processed: 1, Additions: 1, Modifications: 0, Had No Effect: 0" ]] || false
     [[ "$output" =~ "Import completed successfully." ]] || false
 
@@ -573,6 +575,7 @@ DELIM
 
     run dolt table import -u test 1pk5col-ints-updt.csv
     [ "$status" -eq 0 ]
+    [[ "$output" =~ "Warning: There are fewer columns in the import file's schema than the table's schema" ]] || false
     [[ "$output" =~ "Rows Processed: 1, Additions: 1, Modifications: 0, Had No Effect: 0" ]] || false
     [[ "$output" =~ "Import completed successfully." ]] || false
 
@@ -595,6 +598,7 @@ DELIM
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Rows Processed: 1, Additions: 1, Modifications: 0, Had No Effect: 0" ]] || false
     [[ "$output" =~ "Import completed successfully." ]] || false
+    ! [[ "$output" =~ "Warning: There are fewer columns in the import file's schema than the table's schema" ]] || false
 
     run dolt sql -r csv -q "select * from test"
     [ "${lines[1]}" = "0,1,2,3,4,6" ]
@@ -615,6 +619,7 @@ DELIM
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Rows Processed: 1, Additions: 1, Modifications: 0, Had No Effect: 0" ]] || false
     [[ "$output" =~ "Import completed successfully." ]] || false
+    ! [[ "$output" =~ "Warning: There are fewer columns in the import file's schema than the table's schema" ]] || false
 
     run dolt sql -r csv -q "select * from test"
     [ "${lines[1]}" = "0,1,2,3,4,6" ]
@@ -635,6 +640,7 @@ DELIM
 
     run dolt table import -u test 1pk5col-ints-updt.csv
     [ "$status" -eq 0 ]
+    [[ "$output" =~ "Warning: There are fewer columns in the import file's schema than the table's schema" ]] || false
     [[ "$output" =~ "Rows Processed: 1, Additions: 0, Modifications: 1, Had No Effect: 0" ]] || false
     [[ "$output" =~ "Import completed successfully." ]] || false
 
@@ -674,6 +680,7 @@ DELIM
 
     run dolt table import -u keyless data.csv
     [ "$status" -eq 0 ]
+    [[ "$output" =~ "Warning: There are fewer columns in the import file's schema than the table's schema" ]] || false
     [[ "$output" =~ "Rows Processed: 1, Additions: 1, Modifications: 0, Had No Effect: 0" ]] || false
     [[ "$output" =~ "Import completed successfully." ]] || false
 
@@ -806,7 +813,7 @@ DELIM
     ! [[ "$output" =~ "6,bottle,red" ]] || false
 }
 
-@test "import-update-tables: successfully update child table in multi-key fk relationship " {
+@test "import-update-tables: successfully update child table in multi-key fk relationship" {
     skip_nbf_dolt_1
     dolt sql -q "drop table objects"
     dolt sql -q "drop table colors"
@@ -888,7 +895,6 @@ DELIM
 }
 
 @test "import-update-tables: import update with CASCADE ON UPDATE" {
-   skip_nbf_dolt_1
    dolt sql <<SQL
 CREATE TABLE one (
   pk int PRIMARY KEY,
@@ -997,7 +1003,6 @@ DELIM
 }
 
 @test "import-update-tables: disable foreign key checks" {
-    skip_nbf_dolt_1
     cat <<DELIM > objects-bad.csv
 id,name,color
 4,laptop,blue
@@ -1016,4 +1021,151 @@ DELIM
     run dolt constraints verify objects
     [ "$status" -eq 1 ]
     [[ "$output" =~ "All constraints are not satisfied" ]] || false
+}
+
+@test "import-update-tables: bit types" {
+    dolt sql -q "CREATE TABLE bitted (id int PRIMARY KEY, b bit)"
+    dolt sql -q "INSERT INTO bitted VALUES (1, 0), (3, 1)"
+
+    dolt table export bitted bitted.csv
+
+    run dolt table import -u bitted bitted.csv
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Rows Processed: 2, Additions: 0, Modifications: 0, Had No Effect: 2" ]] || false
+
+    run dolt sql -r csv -q "select id, convert(b, unsigned) as b from bitted order by id"
+    [[ "$output" =~ "id,b" ]] || false
+    [[ "$output" =~ "1,0" ]] || false
+    [[ "$output" =~ "3,1" ]] || false
+
+    # Try with a larger bit size
+    dolt sql -q "create table bitted2 (id int PRIMARY KEY, b bit(4))"
+    dolt sql -q "INSERT INTO bitted2 values (1, 4)"
+
+    dolt table export -f bitted2 bitted.csv
+
+    run dolt table import -u bitted2 bitted.csv
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Rows Processed: 1, Additions: 0, Modifications: 0, Had No Effect: 1" ]] || false
+
+    run dolt sql -r csv -q "select id, convert(b, unsigned) as b from bitted2 order by id"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "id,b" ]] || false
+    [[ "$output" =~ "1,4" ]] || false
+
+    # Try with a binary value like 0x04
+    echo -e 'id,b\n2,0x04\n3,0xa'|dolt table import -u bitted2
+    [ "$status" -eq 0 ]
+
+    run dolt sql -r csv -q "select id, convert(b, unsigned) as b from bitted2 order by id"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "id,b" ]] || false
+    [[ "$output" =~ "1,4" ]] || false
+    [[ "$output" =~ "2,4" ]] || false
+    [[ "$output" =~ "3,10" ]] || false
+
+    # Try an actual bit string like b'11'
+    cat <<DELIM > bitted.csv
+id,b
+4,b'100'
+DELIM
+
+    run dolt table import -u bitted2 bitted.csv
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Rows Processed: 1, Additions: 1, Modifications: 0, Had No Effect: 0" ]] || false
+
+    run dolt sql -r csv -q "select id, convert(b, unsigned) as b from bitted2 where id = 4"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "id,b" ]] || false
+    [[ "$output" =~ "4,4" ]] || false
+
+    cat <<DELIM > bitted-bad.csv
+id,b
+5,b'1001
+DELIM
+
+    run dolt table import -u bitted2 bitted-bad.csv
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "Unparsable bit value b'1001" ]] || false
+}
+
+@test "import-update-tables: binary and varbinary types" {
+    # Varbinary column
+    dolt sql -q "create table t(pk int primary key, val varbinary(100))"
+    cat <<DELIM > binary.csv
+pk,val
+1,a\0
+DELIM
+
+    run dolt table import -u t binary.csv
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Rows Processed: 1, Additions: 1, Modifications: 0, Had No Effect: 0" ]] || false
+
+    run dolt sql -r csv -q "select * from t order by pk"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "pk,v" ]] || false
+    [[ "$output" =~ "1,a\0" ]] || false
+
+    dolt table rm t
+
+    # Binary column
+    dolt sql -q "create table t(pk int primary key, val binary(10))"
+
+    run dolt table import -u t binary.csv
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Rows Processed: 1, Additions: 1, Modifications: 0, Had No Effect: 0" ]] || false
+
+    run dolt sql -r csv -q "select * from t order by pk"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "pk,val" ]] || false
+    [[ "$output" =~ "1,a\0" ]] || false
+}
+
+@test "import-update-tables: enum type" {
+    skip "dolt is improperly giving a default value for a bad enum value on --continue"
+
+    dolt sql -q "create table t(pk int primary key, size ENUM('x-small', 'small', 'medium', 'large', 'x-large'))"
+    cat <<DELIM > enum.csv
+pk,size
+1,small
+2,medium
+3,large
+DELIM
+
+    run dolt table import -u t enum.csv
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Rows Processed: 3, Additions: 3, Modifications: 0, Had No Effect: 0" ]] || false
+
+    run dolt sql -r csv -q "select * from t order by pk"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "pk,size" ]] || false
+    [[ "$output" =~ "1,small" ]] || false
+    [[ "$output" =~ "2,medium" ]] || false
+    [[ "$output" =~ "3,large" ]] || false
+
+    cat <<DELIM > bad-enum.csv
+pk,size
+1,small
+2,medium
+3,large
+4,dasdas
+DELIM
+
+    run dolt table import -u t bad-enum.csv
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "Bad Row: [4,dasdas]" ]] || false
+
+    # This is not correct
+    run dolt table import -u t bad-enum.csv --continue
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Rows Processed: 4, Additions: 1, Modifications: 0, Had No Effect: 3" ]] || false
+
+    run dolt sql -r csv -q "select * from t order by pk"
+    [ "$status" -eq 0 ]
+
+    [[ "$output" =~ "pk,size" ]] || false
+    [[ "$output" =~ "1,small" ]] || false
+    [[ "$output" =~ "2,medium" ]] || false
+    [[ "$output" =~ "3,large" ]] || false
+    [[ "$output" =~ "4,x-small" ]] || false # should be empty
 }

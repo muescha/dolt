@@ -15,73 +15,28 @@
 package index
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"time"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/shopspring/decimal"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/schema/typeinfo"
 	geo "github.com/dolthub/dolt/go/store/geometry"
-	"github.com/dolthub/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
 )
 
 var ErrValueExceededMaxFieldSize = errors.New("value exceeded max field size of 65kb")
 
-// todo(andy): this should go in GMS
-func DenormalizeRow(sch sql.Schema, row sql.Row) (sql.Row, error) {
-	var err error
-	for i := range row {
-		if row[i] == nil {
-			continue
-		}
-		switch typ := sch[i].Type.(type) {
-		case sql.DecimalType:
-			row[i] = row[i].(decimal.Decimal).String()
-		case sql.EnumType:
-			row[i], err = typ.Unmarshal(int64(row[i].(uint16)))
-		case sql.SetType:
-			row[i], err = typ.Unmarshal(row[i].(uint64))
-		default:
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	return row, nil
-}
-
-// todo(andy): this should go in GMS
-func NormalizeRow(sch sql.Schema, row sql.Row) (sql.Row, error) {
-	var err error
-	for i := range row {
-		if row[i] == nil {
-			continue
-		}
-		switch typ := sch[i].Type.(type) {
-		case sql.DecimalType:
-			row[i], err = decimal.NewFromString(row[i].(string))
-		case sql.EnumType:
-			var v int64
-			v, err = typ.Marshal(row[i])
-			row[i] = uint16(v)
-		case sql.SetType:
-			row[i], err = typ.Marshal(row[i])
-		default:
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	return row, nil
-}
-
 // GetField reads the value from the ith field of the Tuple as an interface{}.
-func GetField(td val.TupleDesc, i int, tup val.Tuple) (v interface{}, err error) {
+func GetField(ctx context.Context, td val.TupleDesc, i int, tup val.Tuple, ns tree.NodeStore) (v interface{}, err error) {
 	var ok bool
 	switch td.Types[i].Enc {
 	case val.Int8Enc:
@@ -116,7 +71,7 @@ func GetField(td val.TupleDesc, i int, tup val.Tuple) (v interface{}, err error)
 		var t int64
 		t, ok = td.GetSqlTime(i, tup)
 		if ok {
-			v, err = deserializeTime(t)
+			v = sql.Timespan(t)
 		}
 	case val.DatetimeEnc:
 		v, ok = td.GetDatetime(i, tup)
@@ -144,6 +99,26 @@ func GetField(td val.TupleDesc, i int, tup val.Tuple) (v interface{}, err error)
 		}
 	case val.Hash128Enc:
 		v, ok = td.GetHash128(i, tup)
+	case val.BytesAddrEnc:
+		var h hash.Hash
+		h, ok = td.GetBytesAddr(i, tup)
+		if ok {
+			v, err = tree.NewByteArray(h, ns).ToBytes(ctx)
+		}
+	case val.JSONAddrEnc:
+		var h hash.Hash
+		h, ok = td.GetJSONAddr(i, tup)
+		if ok {
+			v, err = tree.NewJSONDoc(h, ns).ToJSONDocument(ctx)
+		}
+	case val.StringAddrEnc:
+		var h hash.Hash
+		h, ok = td.GetStringAddr(i, tup)
+		if ok {
+			v, err = tree.NewTextStorage(h, ns).ToString(ctx)
+		}
+	case val.CommitAddrEnc:
+		v, ok = td.GetCommitAddr(i, tup)
 	default:
 		panic("unknown val.encoding")
 	}
@@ -154,7 +129,7 @@ func GetField(td val.TupleDesc, i int, tup val.Tuple) (v interface{}, err error)
 }
 
 // PutField writes an interface{} to the ith field of the Tuple being built.
-func PutField(tb *val.TupleBuilder, i int, v interface{}) error {
+func PutField(ctx context.Context, ns tree.NodeStore, tb *val.TupleBuilder, i int, v interface{}) error {
 	if v == nil {
 		return nil // NULL
 	}
@@ -190,11 +165,7 @@ func PutField(tb *val.TupleBuilder, i int, v interface{}) error {
 	case val.DateEnc:
 		tb.PutDate(i, v.(time.Time))
 	case val.TimeEnc:
-		t, err := serializeTime(v)
-		if err != nil {
-			return err
-		}
-		tb.PutSqlTime(i, t)
+		tb.PutSqlTime(i, int64(v.(sql.Timespan)))
 	case val.DatetimeEnc:
 		tb.PutDatetime(i, v.(time.Time))
 	case val.EnumEnc:
@@ -211,23 +182,39 @@ func PutField(tb *val.TupleBuilder, i int, v interface{}) error {
 			v = []byte(s)
 		}
 		tb.PutByteString(i, v.([]byte))
+	case val.Hash128Enc:
+		tb.PutHash128(i, v.([]byte))
 	case val.GeometryEnc:
 		geo := serializeGeometry(v)
 		if len(geo) > math.MaxUint16 {
 			return ErrValueExceededMaxFieldSize
 		}
 		tb.PutGeometry(i, serializeGeometry(v))
-	case val.JSONEnc:
+	case val.JSONAddrEnc:
 		buf, err := convJson(v)
-		if len(buf) > math.MaxUint16 {
-			return ErrValueExceededMaxFieldSize
-		}
 		if err != nil {
 			return err
 		}
-		tb.PutJSON(i, buf)
-	case val.Hash128Enc:
-		tb.PutHash128(i, v.([]byte))
+		h, err := serializeBytesToAddr(ctx, ns, bytes.NewReader(buf))
+		if err != nil {
+			return err
+		}
+		tb.PutJSONAddr(i, h)
+	case val.BytesAddrEnc:
+		h, err := serializeBytesToAddr(ctx, ns, bytes.NewReader(v.([]byte)))
+		if err != nil {
+			return err
+		}
+		tb.PutBytesAddr(i, h)
+	case val.StringAddrEnc:
+		//todo: v will be []byte after daylon's changes
+		h, err := serializeBytesToAddr(ctx, ns, bytes.NewReader([]byte(v.(string))))
+		if err != nil {
+			return err
+		}
+		tb.PutStringAddr(i, h)
+	case val.CommitAddrEnc:
+		tb.PutCommitAddr(i, v.(hash.Hash))
 	default:
 		panic(fmt.Sprintf("unknown encoding %v %v", enc, v))
 	}
@@ -315,22 +302,18 @@ func serializeGeometry(v interface{}) []byte {
 	}
 }
 
+func serializeBytesToAddr(ctx context.Context, ns tree.NodeStore, r io.Reader) (hash.Hash, error) {
+	tree, err := tree.NewImmutableTreeFromReader(ctx, r, ns, tree.DefaultFixedChunkLength)
+	if err != nil {
+		return hash.Hash{}, err
+	}
+	return tree.Addr, nil
+}
+
 func convJson(v interface{}) (buf []byte, err error) {
 	v, err = sql.JSON.Convert(v)
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(v.(sql.JSONDocument).Val)
-}
-
-func deserializeTime(v int64) (interface{}, error) {
-	return typeinfo.TimeType.ConvertNomsValueToValue(types.Int(v))
-}
-
-func serializeTime(v interface{}) (int64, error) {
-	i, err := typeinfo.TimeType.ConvertValueToNomsValue(nil, nil, v)
-	if err != nil {
-		return 0, err
-	}
-	return int64(i.(types.Int)), nil
 }

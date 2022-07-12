@@ -19,14 +19,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/dolthub/go-mysql-server/sql"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/durable"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
-	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/typed/noms"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/types"
@@ -36,79 +33,64 @@ func PartitionIndexedTableRows(ctx *sql.Context, idx sql.Index, part sql.Partiti
 	rp := part.(rangePartition)
 	doltIdx := idx.(DoltIndex)
 
-	if types.IsFormat_DOLT_1(rp.primary.Format()) {
-		return RowIterForProllyRange(ctx, doltIdx, rp.prollyRange, pkSch, columns, rp.primary, rp.secondary)
+	if types.IsFormat_DOLT_1(rp.durableState.Primary.Format()) {
+		return RowIterForProllyRange(ctx, doltIdx, rp.prollyRange, pkSch, columns, rp.durableState)
 	}
 
 	ranges := []*noms.ReadRange{rp.nomsRange}
-	return RowIterForNomsRanges(ctx, doltIdx, ranges, columns, rp.primary, rp.secondary)
+	return RowIterForNomsRanges(ctx, doltIdx, ranges, columns, rp.durableState)
 }
 
-func RowIterForIndexLookup(ctx *sql.Context, t *doltdb.Table, ilu sql.IndexLookup, pkSch sql.PrimaryKeySchema, columns []string) (sql.RowIter, error) {
+func RowIterForIndexLookup(ctx *sql.Context, t DoltTableable, ilu sql.IndexLookup, pkSch sql.PrimaryKeySchema, columns []string) (sql.RowIter, error) {
 	lookup := ilu.(*doltIndexLookup)
 	idx := lookup.idx
 
-	primary, secondary, err := idx.GetDurableIndexes(ctx, t)
+	durableState, err := idx.getDurableState(ctx, t)
 	if err != nil {
 		return nil, err
 	}
 
 	if types.IsFormat_DOLT_1(idx.Format()) {
-		// todo(andy)
-		return RowIterForProllyRange(ctx, idx, lookup.prollyRanges[0], pkSch, columns, primary, secondary)
+		if len(lookup.prollyRanges) > 1 {
+			return nil, fmt.Errorf("expected a single index range")
+		}
+		return RowIterForProllyRange(ctx, idx, lookup.prollyRanges[0], pkSch, columns, durableState)
 	} else {
-		return RowIterForNomsRanges(ctx, idx, lookup.nomsRanges, columns, primary, secondary)
+		return RowIterForNomsRanges(ctx, idx, lookup.nomsRanges, columns, durableState)
 	}
 }
 
-func RowIterForProllyRange(ctx *sql.Context, idx DoltIndex, ranges prolly.Range, pkSch sql.PrimaryKeySchema, columns []string, primary, secondary durable.Index) (sql.RowIter2, error) {
-	covers := indexCoversCols(idx, columns)
-	if covers {
-		return newProllyCoveringIndexIter(ctx, idx, ranges, pkSch, secondary)
-	} else {
-		return newProllyIndexIter(ctx, idx, ranges, pkSch, primary, secondary)
-	}
-}
-
-func RowIterForNomsRanges(ctx *sql.Context, idx DoltIndex, ranges []*noms.ReadRange, columns []string, primary, secondary durable.Index) (sql.RowIter, error) {
-	m := durable.NomsMapFromIndex(secondary)
-	nrr := noms.NewNomsRangeReader(idx.IndexSchema(), m, ranges)
-
-	covers := indexCoversCols(idx, columns)
-	if covers || idx.ID() == "PRIMARY" {
-		return NewCoveringIndexRowIterAdapter(ctx, idx, nrr, columns), nil
-	} else {
-		return NewIndexLookupRowIterAdapter(ctx, idx, primary, nrr)
-	}
-}
-
-func indexCoversCols(idx DoltIndex, cols []string) bool {
-	if cols == nil {
-		cols = idx.Schema().GetAllCols().GetColumnNames()
-	}
-
-	var idxCols *schema.ColCollection
-	if types.IsFormat_DOLT_1(idx.Format()) {
-		// prolly indexes can cover an index lookup using
-		// both the key and value fields of the index,
-		// this allows using covering index machinery for
-		// primary key index lookups.
-		idxCols = idx.IndexSchema().GetAllCols()
-	} else {
-		// to cover an index lookup, noms indexes must
-		// contain all fields in the index's key.
-		idxCols = idx.IndexSchema().GetPKCols()
-	}
-
-	covers := true
-	for _, colName := range cols {
-		if _, ok := idxCols.GetByNameCaseInsensitive(colName); !ok {
-			covers = false
-			break
+func RowIterForProllyRange(ctx *sql.Context, idx DoltIndex, r prolly.Range, pkSch sql.PrimaryKeySchema, projections []string, durableState *durableIndexState) (sql.RowIter2, error) {
+	if projections == nil {
+		projections = make([]string, len(pkSch.Schema))
+		for i := range projections {
+			projections[i] = pkSch.Schema[i].Name
 		}
 	}
 
-	return covers
+	if sql.IsKeyless(pkSch.Schema) {
+		// in order to resolve row cardinality, keyless indexes must always perform
+		// an indirect lookup through the clustered index.
+		return newProllyKeylessIndexIter(ctx, idx, r, pkSch, projections, durableState.Primary, durableState.Secondary)
+	}
+
+	covers := idx.coversColumns(durableState, projections)
+	if covers {
+		return newProllyCoveringIndexIter(ctx, idx, r, pkSch, projections, durableState.Secondary)
+	}
+	return newProllyIndexIter(ctx, idx, r, pkSch, projections, durableState.Primary, durableState.Secondary)
+}
+
+func RowIterForNomsRanges(ctx *sql.Context, idx DoltIndex, ranges []*noms.ReadRange, columns []string, durableState *durableIndexState) (sql.RowIter, error) {
+	m := durable.NomsMapFromIndex(durableState.Secondary)
+	nrr := noms.NewNomsRangeReader(idx.IndexSchema(), m, ranges)
+
+	covers := idx.coversColumns(durableState, columns)
+	if covers || idx.ID() == "PRIMARY" {
+		return NewCoveringIndexRowIterAdapter(ctx, idx, nrr, columns), nil
+	} else {
+		return NewIndexLookupRowIterAdapter(ctx, idx, durableState, nrr)
+	}
 }
 
 type IndexLookupKeyIterator interface {
@@ -116,13 +98,9 @@ type IndexLookupKeyIterator interface {
 	NextKey(ctx *sql.Context) (row.TaggedValues, error)
 }
 
-func DoltIndexFromLookup(lookup sql.IndexLookup) DoltIndex {
-	return lookup.(*doltIndexLookup).idx
-}
-
-func NewRangePartitionIter(ctx *sql.Context, t *doltdb.Table, lookup sql.IndexLookup) (sql.PartitionIter, error) {
+func NewRangePartitionIter(ctx *sql.Context, t DoltTableable, lookup sql.IndexLookup) (sql.PartitionIter, error) {
 	dlu := lookup.(*doltIndexLookup)
-	primary, secondary, err := dlu.idx.GetDurableIndexes(ctx, t)
+	durableState, err := dlu.idx.getDurableState(ctx, t)
 	if err != nil {
 		return nil, err
 	}
@@ -130,9 +108,7 @@ func NewRangePartitionIter(ctx *sql.Context, t *doltdb.Table, lookup sql.IndexLo
 		nomsRanges:   dlu.nomsRanges,
 		prollyRanges: dlu.prollyRanges,
 		curr:         0,
-		mu:           &sync.Mutex{},
-		secondary:    secondary,
-		primary:      primary,
+		durableState: durableState,
 	}, nil
 }
 
@@ -140,11 +116,7 @@ type rangePartitionIter struct {
 	nomsRanges   []*noms.ReadRange
 	prollyRanges []prolly.Range
 	curr         int
-	mu           *sync.Mutex
-	// the rows of the table the index references
-	primary durable.Index
-	// the rows of the index itself
-	secondary durable.Index
+	durableState *durableIndexState
 }
 
 // Close is required by the sql.PartitionIter interface. Does nothing.
@@ -154,10 +126,7 @@ func (itr *rangePartitionIter) Close(*sql.Context) error {
 
 // Next returns the next partition if there is one, or io.EOF if there isn't.
 func (itr *rangePartitionIter) Next(_ *sql.Context) (sql.Partition, error) {
-	itr.mu.Lock()
-	defer itr.mu.Unlock()
-
-	if types.IsFormat_DOLT_1(itr.secondary.Format()) {
+	if types.IsFormat_DOLT_1(itr.durableState.Secondary.Format()) {
 		return itr.nextProllyPartition()
 	}
 	return itr.nextNomsPartition()
@@ -174,10 +143,9 @@ func (itr *rangePartitionIter) nextProllyPartition() (sql.Partition, error) {
 	itr.curr += 1
 
 	return rangePartition{
-		prollyRange: pr,
-		key:         bytes[:],
-		primary:     itr.primary,
-		secondary:   itr.secondary,
+		prollyRange:  pr,
+		key:          bytes[:],
+		durableState: itr.durableState,
 	}, nil
 }
 
@@ -192,21 +160,17 @@ func (itr *rangePartitionIter) nextNomsPartition() (sql.Partition, error) {
 	itr.curr += 1
 
 	return rangePartition{
-		nomsRange: nr,
-		key:       bytes[:],
-		primary:   itr.primary,
-		secondary: itr.secondary,
+		nomsRange:    nr,
+		key:          bytes[:],
+		durableState: itr.durableState,
 	}, nil
 }
 
 type rangePartition struct {
-	nomsRange   *noms.ReadRange
-	prollyRange prolly.Range
-	key         []byte
-	// the rows of the table the index refers to
-	primary durable.Index
-	// the index entries
-	secondary durable.Index
+	nomsRange    *noms.ReadRange
+	prollyRange  prolly.Range
+	key          []byte
+	durableState *durableIndexState
 }
 
 func (rp rangePartition) Key() []byte {

@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"strconv"
 
@@ -63,10 +62,9 @@ func (cmd MergeCmd) Description() string {
 	return "Merge a branch."
 }
 
-// CreateMarkdown creates a markdown file containing the helptext for the command at the given path
-func (cmd MergeCmd) CreateMarkdown(wr io.Writer, commandStr string) error {
+func (cmd MergeCmd) Docs() *cli.CommandDocumentation {
 	ap := cli.CreateMergeArgParser()
-	return CreateMarkdown(wr, cli.GetCommandDocumentation(commandStr, mergeDocs, ap))
+	return cli.NewCommandDocumentation(mergeDocs, ap)
 }
 
 func (cmd MergeCmd) ArgParser() *argparser.ArgParser {
@@ -81,7 +79,7 @@ func (cmd MergeCmd) EventType() eventsapi.ClientEventType {
 // Exec executes the command
 func (cmd MergeCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cli.CreateMergeArgParser()
-	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, mergeDocs, ap))
+	help, usage := cli.HelpAndUsagePrinters(cli.CommandDocsForCommandString(commandStr, mergeDocs, ap))
 	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	if apr.ContainsAll(cli.SquashParam, cli.NoFFParam) {
@@ -92,6 +90,10 @@ func (cmd MergeCmd) Exec(ctx context.Context, commandStr string, args []string, 
 	// This command may create a commit, so we need user identity
 	if !cli.CheckUserNameAndEmail(dEnv) {
 		return 1
+	}
+
+	if dEnv.IsLocked() {
+		return HandleVErrAndExitCode(errhand.VerboseErrorFromError(env.ErrActiveServerLock.New(dEnv.LockFile())), help)
 	}
 
 	var verr errhand.VerboseError
@@ -241,7 +243,7 @@ func getUnmergedTableCount(ctx context.Context, root *doltdb.RootValue) (int, er
 }
 
 func getCommitMessage(ctx context.Context, apr *argparser.ArgParseResults, dEnv *env.DoltEnv, spec *merge.MergeSpec) (string, errhand.VerboseError) {
-	if m, ok := apr.GetValue(cli.CommitMessageArg); ok {
+	if m, ok := apr.GetValue(cli.MessageArg); ok {
 		return m, nil
 	}
 

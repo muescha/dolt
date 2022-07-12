@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
@@ -42,7 +43,7 @@ type reporter func(ctx context.Context, change *diff.Difference, ch chan<- DiffS
 func Summary(ctx context.Context, ch chan DiffSummaryProgress, from, to durable.Index, fromSch, toSch schema.Schema) (err error) {
 	ch <- DiffSummaryProgress{OldSize: from.Count(), NewSize: to.Count()}
 
-	if from.Format() == types.Format_DOLT_1 {
+	if types.IsFormat_DOLT_1(from.Format()) {
 		return prollySummary(ctx, ch, from, to, fromSch, toSch)
 	}
 
@@ -67,7 +68,7 @@ func prollySummary(ctx context.Context, ch chan DiffSummaryProgress, from, to du
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && err != io.EOF {
 		return err
 	}
 	return nil
@@ -102,6 +103,7 @@ func nomsSummary(ctx context.Context, ch chan DiffSummaryProgress, from, to dura
 	return nil
 }
 
+// SummaryForTableDelta pushes diff summary progress messages for the table delta given to the channel given
 func SummaryForTableDelta(ctx context.Context, ch chan DiffSummaryProgress, td TableDelta) error {
 	fromSch, toSch, err := td.GetSchemas(ctx)
 	if err != nil {
@@ -117,23 +119,50 @@ func SummaryForTableDelta(ctx context.Context, ch chan DiffSummaryProgress, td T
 		return err
 	}
 
-	fromRows, toRows, err := td.GetMaps(ctx)
+	fromRows, toRows, err := td.GetRowData(ctx)
 	if err != nil {
 		return err
 	}
 
+	if types.IsFormat_DOLT_1(td.Format()) {
+		if keyless {
+			return fmt.Errorf("keyless diff not supported for format %s", td.Format().VersionString())
+		}
+		return diffProllyTrees(ctx, ch, durable.ProllyMapFromIndex(fromRows), durable.ProllyMapFromIndex(toRows))
+	} else {
+		return diffNomsMaps(ctx, ch, keyless, fromRows, toRows)
+	}
+}
+
+func diffNomsMaps(ctx context.Context, ch chan DiffSummaryProgress, keyless bool, fromRows durable.Index, toRows durable.Index) error {
 	var rpr reporter
 	if keyless {
 		rpr = reportKeylessChanges
 	} else {
 		rpr = reportNomsPkChanges
 		ch <- DiffSummaryProgress{
-			OldSize: fromRows.Len(),
-			NewSize: toRows.Len(),
+			OldSize: fromRows.Count(),
+			NewSize: toRows.Count(),
 		}
 	}
 
-	return summaryWithReporter(ctx, ch, fromRows, toRows, rpr)
+	return summaryWithReporter(ctx, ch, durable.NomsMapFromIndex(fromRows), durable.NomsMapFromIndex(toRows), rpr)
+}
+
+func diffProllyTrees(ctx context.Context, ch chan DiffSummaryProgress, from, to prolly.Map) error {
+	diffSummary, err := prolly.DiffMapSummary(ctx, from, to)
+	if err != nil {
+		return err
+	}
+	ch <- DiffSummaryProgress{
+		Adds:        diffSummary.Adds,
+		Removes:     diffSummary.Removes,
+		Changes:     diffSummary.Changes,
+		CellChanges: diffSummary.CellChanges,
+		NewSize:     diffSummary.NewSize,
+		OldSize:     diffSummary.OldSize,
+	}
+	return nil
 }
 
 func summaryWithReporter(ctx context.Context, ch chan DiffSummaryProgress, from, to types.Map, rpr reporter) (err error) {
@@ -286,10 +315,10 @@ func reportKeylessChanges(ctx context.Context, change *diff.Difference, ch chan<
 // MapSchemaBasedOnName can be used to map column values from one schema to
 // another schema. A column in |inSch| is mapped to |outSch| if they share the
 // same name and primary key membership status. It returns ordinal mappings that
-// can be use to map key, value val.Tuple's of schema |inSch| to a sql.Row of
-// |outSch|. The first ordinal map is for keys, and the second is for values. If
-// a column of |inSch| is missing in |outSch| then that column's index in the
-// ordinal map holds -1.
+// can be use to map key, value val.Tuple's of schema |inSch| to |outSch|. The
+// first ordinal map is for keys, and the second is for values. If a column of
+// |inSch| is missing in |outSch| then that column's index in the ordinal map
+// holds -1.
 // TODO (dhruv): Unit tests
 func MapSchemaBasedOnName(inSch, outSch schema.Schema) (val.OrdinalMapping, val.OrdinalMapping, error) {
 	keyMapping := make(val.OrdinalMapping, inSch.GetPKCols().Size())
@@ -298,7 +327,7 @@ func MapSchemaBasedOnName(inSch, outSch schema.Schema) (val.OrdinalMapping, val.
 	err := inSch.GetPKCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
 		i := inSch.GetPKCols().TagToIdx[tag]
 		if col, ok := outSch.GetPKCols().GetByName(col.Name); ok {
-			j := outSch.GetAllCols().TagToIdx[col.Tag]
+			j := outSch.GetPKCols().TagToIdx[col.Tag]
 			keyMapping[i] = j
 		} else {
 			return true, fmt.Errorf("could not map primary key column %s", col.Name)
@@ -312,7 +341,7 @@ func MapSchemaBasedOnName(inSch, outSch schema.Schema) (val.OrdinalMapping, val.
 	err = inSch.GetNonPKCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
 		i := inSch.GetNonPKCols().TagToIdx[col.Tag]
 		if col, ok := outSch.GetNonPKCols().GetByName(col.Name); ok {
-			j := outSch.GetAllCols().TagToIdx[col.Tag]
+			j := outSch.GetNonPKCols().TagToIdx[col.Tag]
 			valMapping[i] = j
 		} else {
 			valMapping[i] = -1

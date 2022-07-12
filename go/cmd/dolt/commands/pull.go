@@ -17,7 +17,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"io"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
@@ -28,7 +27,6 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/utils/argparser"
 	"github.com/dolthub/dolt/go/store/datas"
-	"github.com/dolthub/dolt/go/store/types"
 )
 
 var pullDocs = cli.CommandDocumentationContent{
@@ -54,14 +52,9 @@ func (cmd PullCmd) Description() string {
 	return "Fetch from a dolt remote data repository and merge."
 }
 
-func (cmd PullCmd) GatedForNBF(nbf *types.NomsBinFormat) bool {
-	return types.IsFormat_DOLT_1(nbf)
-}
-
-// CreateMarkdown creates a markdown file containing the helptext for the command at the given path
-func (cmd PullCmd) CreateMarkdown(wr io.Writer, commandStr string) error {
+func (cmd PullCmd) Docs() *cli.CommandDocumentation {
 	ap := cli.CreatePullArgParser()
-	return CreateMarkdown(wr, cli.GetCommandDocumentation(commandStr, pullDocs, ap))
+	return cli.NewCommandDocumentation(pullDocs, ap)
 }
 
 func (cmd PullCmd) ArgParser() *argparser.ArgParser {
@@ -78,7 +71,7 @@ func (cmd PullCmd) EventType() eventsapi.ClientEventType {
 // Exec executes the command
 func (cmd PullCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cli.CreatePullArgParser()
-	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, pullDocs, ap))
+	help, usage := cli.HelpAndUsagePrinters(cli.CommandDocsForCommandString(commandStr, pullDocs, ap))
 
 	apr := cli.ParseArgsOrDie(ap, args, help)
 
@@ -92,7 +85,12 @@ func (cmd PullCmd) Exec(ctx context.Context, commandStr string, args []string, d
 		remoteName = apr.Arg(0)
 	}
 
-	pullSpec, err := env.NewPullSpec(ctx, dEnv.RepoStateReader(), remoteName, apr.Contains(cli.SquashParam), apr.Contains(cli.NoFFParam), apr.Contains(cli.ForceFlag))
+	if dEnv.IsLocked() {
+		return HandleVErrAndExitCode(errhand.VerboseErrorFromError(env.ErrActiveServerLock.New(dEnv.LockFile())), help)
+	}
+
+	pullSpec, err := env.NewPullSpec(ctx, dEnv.RepoStateReader(), remoteName, apr.Contains(cli.SquashParam), apr.Contains(cli.NoFFParam), apr.Contains(cli.ForceFlag), apr.NArg() == 1)
+
 	if err != nil {
 		return HandleVErrAndExitCode(errhand.VerboseErrorFromError(err), usage)
 	}
@@ -137,6 +135,11 @@ func pullHelper(ctx context.Context, dEnv *env.DoltEnv, pullSpec *env.PullSpec) 
 				return fmt.Errorf("fetch failed; %w", err)
 			}
 
+			// Only merge iff branch is current branch and there is an upstream set (pullSpec.Branch is set to nil if there is no upstream)
+			if branchRef != pullSpec.Branch {
+				continue
+			}
+
 			t := datas.CommitNowFunc()
 
 			roots, err := dEnv.Roots(ctx)
@@ -152,11 +155,6 @@ func pullHelper(ctx context.Context, dEnv *env.DoltEnv, pullSpec *env.PullSpec) 
 					return configErr
 				}
 				name, email = "", ""
-			}
-
-			// Only merge iff branch is current branch
-			if branchRef != pullSpec.Branch {
-				continue
 			}
 
 			// Begin merge

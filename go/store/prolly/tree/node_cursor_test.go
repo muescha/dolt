@@ -33,6 +33,33 @@ func TestNodeCursor(t *testing.T) {
 		testNewCursorAtItem(t, 1000)
 		testNewCursorAtItem(t, 10_000)
 	})
+
+	t.Run("retreat past beginning", func(t *testing.T) {
+		ctx := context.Background()
+		root, _, ns := randomTree(t, 10_000)
+		assert.NotNil(t, root)
+		before, err := NewCursorAtStart(ctx, ns, root)
+		assert.NoError(t, err)
+		err = before.Retreat(ctx)
+		assert.NoError(t, err)
+		assert.False(t, before.Valid())
+
+		start, err := NewCursorAtStart(ctx, ns, root)
+		assert.NoError(t, err)
+		assert.True(t, start.Compare(before) > 0, "start is after before")
+		assert.True(t, before.Compare(start) < 0, "before is before start")
+
+		// Backwards iteration...
+		end, err := NewCursorAtEnd(ctx, ns, root)
+		assert.NoError(t, err)
+		i := 0
+		for end.Compare(before) > 0 {
+			i++
+			err = end.Retreat(ctx)
+			assert.NoError(t, err)
+		}
+		assert.Equal(t, 10_000/2, i)
+	})
 }
 
 func testNewCursorAtItem(t *testing.T, count int) {
@@ -58,7 +85,7 @@ func randomTree(t *testing.T, count int) (Node, [][2]Item, NodeStore) {
 	chkr, err := newEmptyChunker(ctx, ns, serializer)
 	require.NoError(t, err)
 
-	items := randomTupleItemPairs(count / 2)
+	items := randomTupleItemPairs(count/2, ns)
 	for _, item := range items {
 		err = chkr.AddPair(ctx, Item(item[0]), Item(item[1]))
 		assert.NoError(t, err)
@@ -85,8 +112,8 @@ func searchTestTree(item Item, nd Node) int {
 	})
 }
 
-func randomTupleItemPairs(count int) (items [][2]Item) {
-	tups := RandomTuplePairs(count, keyDesc, valDesc)
+func randomTupleItemPairs(count int, ns NodeStore) (items [][2]Item) {
+	tups := RandomTuplePairs(count, keyDesc, valDesc, ns)
 	items = make([][2]Item, count)
 	if len(tups) != len(items) {
 		panic("mismatch")

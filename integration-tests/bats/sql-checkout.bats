@@ -99,7 +99,6 @@ CALL DOLT_CHECKOUT('-b', 'new-branch');
 SQL
 }
 
-
 @test "sql-checkout: DOLT_CHECKOUT -b throws error on branches that already exist" {
     run dolt sql -q "SELECT DOLT_CHECKOUT('-b', 'main')"
     [ $status -eq 1 ]
@@ -287,7 +286,6 @@ SQL
 }
 
 @test "sql-checkout: DOLT_CHECKOUT works with dolt_diff tables" {
-    skip_nbf_dolt_1
     dolt add . && dolt commit -m "1, 2, and 3 in test table"
 
     run dolt sql -q "SELECT * FROM dolt_diff_test";
@@ -331,7 +329,6 @@ SQL
 }
 
 @test "sql-checkout: CALL DOLT_CHECKOUT works with dolt_diff tables" {
-    skip_nbf_dolt_1
     dolt add . && dolt commit -m "1, 2, and 3 in test table"
 
     run dolt sql -q "SELECT * FROM dolt_diff_test";

@@ -48,13 +48,12 @@ type varStringType struct {
 var _ TypeInfo = (*varStringType)(nil)
 
 var (
-	LegacyStringDefaultType = &varStringType{sql.CreateLongText(sql.Collation_Default)}
-	StringDefaultType       = &varStringType{sql.MustCreateStringWithDefaults(sqltypes.VarChar, 16383)}
+	StringDefaultType = &varStringType{sql.MustCreateStringWithDefaults(sqltypes.VarChar, 16383)}
 )
 
 func CreateVarStringTypeFromParams(params map[string]string) (TypeInfo, error) {
 	var length int64
-	var collation sql.Collation
+	var collation sql.CollationID
 	var err error
 	if collationStr, ok := params[varStringTypeParam_Collate]; ok {
 		collation, err = sql.ParseCollation(nil, &collationStr, false)

@@ -30,20 +30,10 @@ import (
 
 // Cursor explores a tree of Nodes.
 type Cursor struct {
-	nd       Node
-	idx      int
-	parent   *Cursor
-	subtrees SubtreeCounts
-	nrw      NodeStore
-}
-
-type SubtreeCounts []uint64
-
-func (sc SubtreeCounts) Sum() (s uint64) {
-	for _, count := range sc {
-		s += count
-	}
-	return
+	nd     Node
+	idx    int
+	parent *Cursor
+	nrw    NodeStore
 }
 
 type CompareFn func(left, right Item) int
@@ -112,11 +102,8 @@ func NewCursorAtOrdinal(ctx context.Context, ns NodeStore, nd Node, ord uint64) 
 			return int(distance)
 		}
 
-		// |subtrees| contains cardinalities of each child tree in |nd|
-		subtrees := nd.getSubtreeCounts()
-
-		for idx = range subtrees {
-			card := int64(subtrees[idx])
+		for idx = 0; idx < nd.Count(); idx++ {
+			card := int64(nd.getSubtreeCount(idx))
 			if (distance - card) < 0 {
 				break
 			}
@@ -230,10 +217,7 @@ func (cur *Cursor) currentSubtreeSize() uint64 {
 	if cur.isLeaf() {
 		return 1
 	}
-	if cur.subtrees == nil { // lazy load
-		cur.subtrees = cur.nd.getSubtreeCounts()
-	}
-	return cur.subtrees[cur.idx]
+	return cur.nd.getSubtreeCount(cur.idx)
 }
 
 func (cur *Cursor) firstKey() Item {
@@ -241,7 +225,7 @@ func (cur *Cursor) firstKey() Item {
 }
 
 func (cur *Cursor) lastKey() Item {
-	lastKeyIdx := int(cur.nd.count - 1)
+	lastKeyIdx := int(cur.nd.count) - 1
 	return cur.nd.GetKey(lastKeyIdx)
 }
 
@@ -250,7 +234,7 @@ func (cur *Cursor) skipToNodeStart() {
 }
 
 func (cur *Cursor) skipToNodeEnd() {
-	lastKeyIdx := int(cur.nd.count - 1)
+	lastKeyIdx := int(cur.nd.count) - 1
 	cur.idx = lastKeyIdx
 }
 
@@ -258,7 +242,7 @@ func (cur *Cursor) keepInBounds() {
 	if cur.idx < 0 {
 		cur.skipToNodeStart()
 	}
-	lastKeyIdx := int(cur.nd.count - 1)
+	lastKeyIdx := int(cur.nd.count) - 1
 	if cur.idx > lastKeyIdx {
 		cur.skipToNodeEnd()
 	}
@@ -271,7 +255,7 @@ func (cur *Cursor) atNodeStart() bool {
 // atNodeEnd returns true if the cursor's current |idx|
 // points to the last node item
 func (cur *Cursor) atNodeEnd() bool {
-	lastKeyIdx := int(cur.nd.count - 1)
+	lastKeyIdx := int(cur.nd.count) - 1
 	return cur.idx == lastKeyIdx
 }
 
@@ -325,9 +309,14 @@ func (cur *Cursor) search(item Item, cb CompareFn) (idx int) {
 	return idx
 }
 
-// invalidate sets the cursor's index to the node count.
-func (cur *Cursor) invalidate() {
+// invalidateAtEnd sets the cursor's index to the node count.
+func (cur *Cursor) invalidateAtEnd() {
 	cur.idx = int(cur.nd.count)
+}
+
+// invalidateAtStart sets the cursor's index to -1.
+func (cur *Cursor) invalidateAtStart() {
+	cur.idx = -1
 }
 
 // hasNext returns true if we do not need to recursively
@@ -375,7 +364,7 @@ func (cur *Cursor) Advance(ctx context.Context) error {
 	}
 
 	if cur.parent == nil {
-		cur.invalidate()
+		cur.invalidateAtEnd()
 		return nil
 	}
 
@@ -387,7 +376,7 @@ func (cur *Cursor) Advance(ctx context.Context) error {
 
 	if cur.parent.outOfBounds() {
 		// exhausted every parent cursor
-		cur.invalidate()
+		cur.invalidateAtEnd()
 		return nil
 	}
 
@@ -398,8 +387,6 @@ func (cur *Cursor) Advance(ctx context.Context) error {
 	}
 
 	cur.skipToNodeStart()
-	cur.subtrees = nil // lazy load
-
 	return nil
 }
 
@@ -412,7 +399,7 @@ func (cur *Cursor) Retreat(ctx context.Context) error {
 	}
 
 	if cur.parent == nil {
-		cur.invalidate()
+		cur.invalidateAtStart()
 		return nil
 	}
 
@@ -424,7 +411,7 @@ func (cur *Cursor) Retreat(ctx context.Context) error {
 
 	if cur.parent.outOfBounds() {
 		// exhausted every parent cursor
-		cur.invalidate()
+		cur.invalidateAtStart()
 		return nil
 	}
 
@@ -435,8 +422,6 @@ func (cur *Cursor) Retreat(ctx context.Context) error {
 	}
 
 	cur.skipToNodeEnd()
-	cur.subtrees = nil // lazy load
-
 	return nil
 }
 

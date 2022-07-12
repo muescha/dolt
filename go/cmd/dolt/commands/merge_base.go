@@ -17,7 +17,6 @@ package commands
 import (
 	"context"
 	"errors"
-	"io"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 
@@ -49,10 +48,9 @@ func (cmd MergeBaseCmd) Description() string {
 	return mergeBaseDocs.ShortDesc
 }
 
-// CreateMarkdown creates a markdown file containing the helptext for the command at the given path
-func (cmd MergeBaseCmd) CreateMarkdown(wr io.Writer, commandStr string) error {
+func (cmd MergeBaseCmd) Docs() *cli.CommandDocumentation {
 	ap := cmd.ArgParser()
-	return CreateMarkdown(wr, cli.GetCommandDocumentation(commandStr, mergeBaseDocs, ap))
+	return cli.NewCommandDocumentation(mergeBaseDocs, ap)
 }
 
 func (cmd MergeBaseCmd) ArgParser() *argparser.ArgParser {
@@ -69,13 +67,17 @@ func (cmd MergeBaseCmd) EventType() eventsapi.ClientEventType {
 // Exec executes the command
 func (cmd MergeBaseCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cmd.ArgParser()
-	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, mergeBaseDocs, ap))
+	help, usage := cli.HelpAndUsagePrinters(cli.CommandDocsForCommandString(commandStr, mergeBaseDocs, ap))
 	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	var verr errhand.VerboseError
 	if apr.NArg() != 2 {
 		verr = errhand.BuildDError("%s takes exactly 2 args", cmd.Name()).Build()
 		return HandleVErrAndExitCode(verr, usage)
+	}
+
+	if dEnv.IsLocked() {
+		return HandleVErrAndExitCode(errhand.VerboseErrorFromError(env.ErrActiveServerLock.New(dEnv.LockFile())), help)
 	}
 
 	left, verr := ResolveCommitWithVErr(dEnv, apr.Arg(0))

@@ -40,6 +40,7 @@ const (
 
 	schemaRefKey            = "schema_ref"
 	tableRowsKey            = "rows"
+	artifactsKey            = "artifacts"
 	conflictsKey            = "conflicts"
 	conflictSchemasKey      = "conflict_schemas"
 	constraintViolationsKey = "constraint_violations"
@@ -81,6 +82,11 @@ type Table interface {
 	// SetIndexes sets the secondary indexes for this table.
 	SetIndexes(ctx context.Context, indexes IndexSet) (Table, error)
 
+	// GetArtifacts returns the merge artifacts for this table.
+	GetArtifacts(ctx context.Context) (ArtifactIndex, error)
+	// SetArtifacts sets the merge artifacts for this table.
+	SetArtifacts(ctx context.Context, artifacts ArtifactIndex) (Table, error)
+
 	// GetConflicts returns the merge conflicts for this table.
 	GetConflicts(ctx context.Context) (conflict.ConflictSchema, ConflictIndex, error)
 	// HasConflicts returns true if this table has conflicts.
@@ -106,6 +112,7 @@ type Table interface {
 
 type nomsTable struct {
 	vrw         types.ValueReadWriter
+	ns          tree.NodeStore
 	tableStruct types.Struct
 }
 
@@ -114,14 +121,14 @@ var _ Table = nomsTable{}
 var sharePool = pool.NewBuffPool()
 
 // NewNomsTable makes a new Table.
-func NewNomsTable(ctx context.Context, vrw types.ValueReadWriter, sch schema.Schema, rows types.Map, indexes IndexSet, autoIncVal types.Value) (Table, error) {
-	return NewTable(ctx, vrw, sch, nomsIndex{index: rows, vrw: vrw}, indexes, autoIncVal)
+func NewNomsTable(ctx context.Context, vrw types.ValueReadWriter, ns tree.NodeStore, sch schema.Schema, rows types.Map, indexes IndexSet, autoIncVal types.Value) (Table, error) {
+	return NewTable(ctx, vrw, ns, sch, nomsIndex{index: rows, vrw: vrw}, indexes, autoIncVal)
 }
 
 // NewTable returns a new Table.
-func NewTable(ctx context.Context, vrw types.ValueReadWriter, sch schema.Schema, rows Index, indexes IndexSet, autoIncVal types.Value) (Table, error) {
+func NewTable(ctx context.Context, vrw types.ValueReadWriter, ns tree.NodeStore, sch schema.Schema, rows Index, indexes IndexSet, autoIncVal types.Value) (Table, error) {
 	if vrw.Format().UsesFlatbuffers() {
-		return newDoltDevTable(ctx, vrw, sch, rows, indexes, autoIncVal)
+		return newDoltDevTable(ctx, vrw, ns, sch, rows, indexes, autoIncVal)
 	}
 
 	schVal, err := encoding.MarshalSchemaAsNomsValue(ctx, vrw, sch)
@@ -140,7 +147,7 @@ func NewTable(ctx context.Context, vrw types.ValueReadWriter, sch schema.Schema,
 	}
 
 	if indexes == nil {
-		indexes = NewIndexSet(ctx, vrw)
+		indexes = NewIndexSet(ctx, vrw, ns)
 	}
 
 	indexesRef, err := refFromNomsValue(ctx, vrw, mapFromIndexSet(indexes))
@@ -163,11 +170,11 @@ func NewTable(ctx context.Context, vrw types.ValueReadWriter, sch schema.Schema,
 		return nil, err
 	}
 
-	return nomsTable{vrw, tableStruct}, nil
+	return nomsTable{vrw, ns, tableStruct}, nil
 }
 
 // TableFromAddr deserializes the table in the chunk at |addr|.
-func TableFromAddr(ctx context.Context, vrw types.ValueReadWriter, addr hash.Hash) (Table, error) {
+func TableFromAddr(ctx context.Context, vrw types.ValueReadWriter, ns tree.NodeStore, addr hash.Hash) (Table, error) {
 	val, err := vrw.ReadValue(ctx, addr)
 	if err != nil {
 		return nil, err
@@ -180,7 +187,7 @@ func TableFromAddr(ctx context.Context, vrw types.ValueReadWriter, addr hash.Has
 			return nil, err
 		}
 
-		return nomsTable{vrw: vrw, tableStruct: st}, nil
+		return nomsTable{vrw: vrw, tableStruct: st, ns: ns}, nil
 	} else {
 		sm, ok := val.(types.SerialMessage)
 		if !ok {
@@ -191,7 +198,7 @@ func TableFromAddr(ctx context.Context, vrw types.ValueReadWriter, addr hash.Has
 			err = errors.New("table ref is unexpected noms value; GetFileID == " + serial.GetFileID([]byte(sm)))
 			return nil, err
 		}
-		return doltDevTable{vrw, serial.GetRootAsTable([]byte(sm), 0)}, nil
+		return doltDevTable{vrw, ns, serial.GetRootAsTable([]byte(sm), 0)}, nil
 	}
 }
 
@@ -215,6 +222,15 @@ func VrwFromTable(t Table) types.ValueReadWriter {
 	} else {
 		ddt := t.(doltDevTable)
 		return ddt.vrw
+	}
+}
+
+func NodeStoreFromTable(t Table) tree.NodeStore {
+	if nt, ok := t.(nomsTable); ok {
+		return nt.ns
+	} else {
+		ddt := t.(doltDevTable)
+		return ddt.ns
 	}
 }
 
@@ -271,7 +287,7 @@ func (t nomsTable) SetSchema(ctx context.Context, sch schema.Schema) (Table, err
 		return nil, err
 	}
 
-	return nomsTable{t.vrw, newTableStruct}, nil
+	return nomsTable{t.vrw, t.ns, newTableStruct}, nil
 }
 
 // SetTableRows implements Table.
@@ -286,7 +302,7 @@ func (t nomsTable) SetTableRows(ctx context.Context, updatedRows Index) (Table, 
 		return nil, err
 	}
 
-	return nomsTable{t.vrw, updatedSt}, nil
+	return nomsTable{t.vrw, t.ns, updatedSt}, nil
 }
 
 // GetTableRows implements Table.
@@ -301,7 +317,7 @@ func (t nomsTable) GetTableRows(ctx context.Context) (Index, error) {
 		return nil, err
 	}
 
-	return indexFromRef(ctx, t.vrw, sch, val.(types.Ref))
+	return indexFromRef(ctx, t.vrw, t.ns, sch, val.(types.Ref))
 }
 
 // GetIndexes implements Table.
@@ -311,7 +327,7 @@ func (t nomsTable) GetIndexes(ctx context.Context) (IndexSet, error) {
 		return nil, err
 	}
 	if !ok {
-		return NewIndexSet(ctx, t.vrw), nil
+		return NewIndexSet(ctx, t.vrw, t.ns), nil
 	}
 
 	im, err := iv.(types.Ref).TargetValue(ctx, t.vrw)
@@ -322,13 +338,14 @@ func (t nomsTable) GetIndexes(ctx context.Context) (IndexSet, error) {
 	return nomsIndexSet{
 		indexes: im.(types.Map),
 		vrw:     t.vrw,
+		ns:      t.ns,
 	}, nil
 }
 
 // SetIndexes implements Table.
 func (t nomsTable) SetIndexes(ctx context.Context, indexes IndexSet) (Table, error) {
 	if indexes == nil {
-		indexes = NewIndexSet(ctx, t.vrw)
+		indexes = NewIndexSet(ctx, t.vrw, t.ns)
 	}
 
 	indexesRef, err := refFromNomsValue(ctx, t.vrw, mapFromIndexSet(indexes))
@@ -341,7 +358,48 @@ func (t nomsTable) SetIndexes(ctx context.Context, indexes IndexSet) (Table, err
 		return nil, err
 	}
 
-	return nomsTable{t.vrw, newTableStruct}, nil
+	return nomsTable{t.vrw, t.ns, newTableStruct}, nil
+}
+
+// GetArtifacts implements Table.
+func (t nomsTable) GetArtifacts(ctx context.Context) (ArtifactIndex, error) {
+	if t.Format() != types.Format_DOLT_1 {
+		panic("artifacts not implemented for old storage format")
+	}
+
+	sch, err := t.GetSchema(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	val, ok, err := t.tableStruct.MaybeGet(artifactsKey)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return NewEmptyArtifactIndex(ctx, t.vrw, t.ns, sch)
+	}
+
+	return artifactIndexFromRef(ctx, t.vrw, t.ns, sch, val.(types.Ref))
+}
+
+// SetArtifacts implements Table.
+func (t nomsTable) SetArtifacts(ctx context.Context, artifacts ArtifactIndex) (Table, error) {
+	if t.Format() != types.Format_DOLT_1 {
+		panic("artifacts not implemented for old storage format")
+	}
+
+	ref, err := RefFromArtifactIndex(ctx, t.vrw, artifacts)
+	if err != nil {
+		return nil, err
+	}
+
+	updated, err := t.tableStruct.Set(artifactsKey, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	return nomsTable{t.vrw, t.ns, updated}, nil
 }
 
 // HasConflicts implements Table.
@@ -361,7 +419,7 @@ func (t nomsTable) GetConflicts(ctx context.Context) (conflict.ConflictSchema, C
 		if err != nil {
 			return conflict.ConflictSchema{}, nil, err
 		}
-		empty, err := NewEmptyConflictIndex(ctx, t.vrw, sch, sch, sch)
+		empty, err := NewEmptyConflictIndex(ctx, t.vrw, t.ns, sch, sch, sch)
 		if err != nil {
 			return conflict.ConflictSchema{}, nil, err
 		}
@@ -379,14 +437,14 @@ func (t nomsTable) GetConflicts(ctx context.Context) (conflict.ConflictSchema, C
 	}
 
 	if conflictsVal == nil {
-		confIndex, err := NewEmptyConflictIndex(ctx, t.vrw, schemas.Schema, schemas.MergeSchema, schemas.Base)
+		confIndex, err := NewEmptyConflictIndex(ctx, t.vrw, t.ns, schemas.Schema, schemas.MergeSchema, schemas.Base)
 		if err != nil {
 			return conflict.ConflictSchema{}, nil, err
 		}
 		return conflict.ConflictSchema{}, confIndex, nil
 	}
 
-	i, err := conflictIndexFromRef(ctx, t.vrw, schemas.Schema, schemas.MergeSchema, schemas.Base, conflictsVal.(types.Ref))
+	i, err := conflictIndexFromRef(ctx, t.vrw, t.ns, schemas.Schema, schemas.MergeSchema, schemas.Base, conflictsVal.(types.Ref))
 	if err != nil {
 		return conflict.ConflictSchema{}, nil, err
 	}
@@ -396,6 +454,10 @@ func (t nomsTable) GetConflicts(ctx context.Context) (conflict.ConflictSchema, C
 
 // SetConflicts implements Table.
 func (t nomsTable) SetConflicts(ctx context.Context, schemas conflict.ConflictSchema, conflictData ConflictIndex) (Table, error) {
+	if t.Format() == types.Format_DOLT_1 {
+		panic("should use artifacts")
+	}
+
 	conflictsRef, err := RefFromConflictIndex(ctx, t.vrw, conflictData)
 	if err != nil {
 		return nil, err
@@ -416,7 +478,7 @@ func (t nomsTable) SetConflicts(ctx context.Context, schemas conflict.ConflictSc
 		return nil, err
 	}
 
-	return nomsTable{t.vrw, updatedSt}, nil
+	return nomsTable{t.vrw, t.ns, updatedSt}, nil
 }
 
 // GetConflictSchemas implements Table.
@@ -452,6 +514,10 @@ func (t nomsTable) GetConflictSchemas(ctx context.Context) (base, sch, mergeSch 
 
 // ClearConflicts implements Table.
 func (t nomsTable) ClearConflicts(ctx context.Context) (Table, error) {
+	if t.Format() == types.Format_DOLT_1 {
+		panic("should use artifacts")
+	}
+
 	tSt, err := t.tableStruct.Delete(conflictSchemasKey)
 
 	if err != nil {
@@ -464,7 +530,7 @@ func (t nomsTable) ClearConflicts(ctx context.Context) (Table, error) {
 		return nil, err
 	}
 
-	return nomsTable{t.vrw, tSt}, nil
+	return nomsTable{t.vrw, t.ns, tSt}, nil
 }
 
 // GetConstraintViolations implements Table.
@@ -492,7 +558,7 @@ func (t nomsTable) SetConstraintViolations(ctx context.Context, violationsMap ty
 		if err != nil {
 			return nil, err
 		}
-		return nomsTable{t.vrw, updatedStruct}, nil
+		return nomsTable{t.vrw, t.ns, updatedStruct}, nil
 	}
 	constraintViolationsRef, err := refFromNomsValue(ctx, t.vrw, violationsMap)
 	if err != nil {
@@ -502,7 +568,7 @@ func (t nomsTable) SetConstraintViolations(ctx context.Context, violationsMap ty
 	if err != nil {
 		return nil, err
 	}
-	return nomsTable{t.vrw, updatedStruct}, nil
+	return nomsTable{t.vrw, t.ns, updatedStruct}, nil
 }
 
 // GetAutoIncrement implements Table.
@@ -535,7 +601,7 @@ func (t nomsTable) SetAutoIncrement(ctx context.Context, val uint64) (Table, err
 	if err != nil {
 		return nil, err
 	}
-	return nomsTable{t.vrw, st}, nil
+	return nomsTable{t.vrw, t.ns, st}, nil
 }
 
 func (t nomsTable) DebugString(ctx context.Context) string {
@@ -634,6 +700,7 @@ func schemaFromAddr(ctx context.Context, vrw types.ValueReadWriter, addr hash.Ha
 
 type doltDevTable struct {
 	vrw types.ValueReadWriter
+	ns  tree.NodeStore
 	msg *serial.Table
 }
 
@@ -669,6 +736,7 @@ type serialTableFields struct {
 	conflictstheirs   []byte
 	conflictsancestor []byte
 	violations        []byte
+	artifacts         []byte
 	autoincval        uint64
 }
 
@@ -694,6 +762,7 @@ func (fields serialTableFields) write() *serial.Table {
 	conflictsoff := serial.ConflictsEnd(builder)
 
 	violationsoff := builder.CreateByteVector(fields.violations)
+	artifactsoff := builder.CreateByteVector(fields.artifacts)
 
 	serial.TableStart(builder)
 	serial.TableAddSchema(builder, schemaoff)
@@ -702,11 +771,12 @@ func (fields serialTableFields) write() *serial.Table {
 	serial.TableAddAutoIncrementValue(builder, fields.autoincval)
 	serial.TableAddConflicts(builder, conflictsoff)
 	serial.TableAddViolations(builder, violationsoff)
+	serial.TableAddArtifacts(builder, artifactsoff)
 	builder.FinishWithFileIdentifier(serial.TableEnd(builder), []byte(serial.TableFileID))
 	return serial.GetRootAsTable(builder.FinishedBytes(), 0)
 }
 
-func newDoltDevTable(ctx context.Context, vrw types.ValueReadWriter, sch schema.Schema, rows Index, indexes IndexSet, autoIncVal types.Value) (Table, error) {
+func newDoltDevTable(ctx context.Context, vrw types.ValueReadWriter, ns tree.NodeStore, sch schema.Schema, rows Index, indexes IndexSet, autoIncVal types.Value) (Table, error) {
 	schVal, err := encoding.MarshalSchemaAsNomsValue(ctx, vrw, sch)
 	if err != nil {
 		return nil, err
@@ -724,7 +794,7 @@ func newDoltDevTable(ctx context.Context, vrw types.ValueReadWriter, sch schema.
 	}
 
 	if indexes == nil {
-		indexes = NewIndexSet(ctx, vrw)
+		indexes = NewIndexSet(ctx, vrw, ns)
 	}
 
 	var autoInc uint64
@@ -742,10 +812,11 @@ func newDoltDevTable(ctx context.Context, vrw types.ValueReadWriter, sch schema.
 		conflictstheirs:   emptyhash[:],
 		conflictsancestor: emptyhash[:],
 		violations:        emptyhash[:],
+		artifacts:         emptyhash[:],
 		autoincval:        autoInc,
 	}.write()
 
-	return doltDevTable{vrw, msg}, nil
+	return doltDevTable{vrw, ns, msg}, nil
 }
 
 func (t doltDevTable) nomsValue() types.Value {
@@ -783,7 +854,7 @@ func (t doltDevTable) SetSchema(ctx context.Context, sch schema.Schema) (Table, 
 	addr := schRef.TargetHash()
 	msg := t.clone()
 	copy(msg.SchemaBytes(), addr[:])
-	return doltDevTable{t.vrw, msg}, nil
+	return doltDevTable{t.vrw, t.ns, msg}, nil
 }
 
 func (t doltDevTable) GetTableRows(ctx context.Context) (Index, error) {
@@ -794,13 +865,13 @@ func (t doltDevTable) GetTableRows(ctx context.Context) (Index, error) {
 		if err != nil {
 			return nil, err
 		}
-		return IndexFromNomsMap(tv.(types.Map), t.vrw), nil
+		return IndexFromNomsMap(tv.(types.Map), t.vrw, t.ns), nil
 	} else {
 		sch, err := t.GetSchema(ctx)
 		if err != nil {
 			return nil, err
 		}
-		m := shim.MapFromValue(types.TupleRowStorage(rowbytes), sch, t.vrw)
+		m := shim.MapFromValue(types.TupleRowStorage(rowbytes), sch, t.ns)
 		return IndexFromProllyMap(m), nil
 	}
 }
@@ -815,21 +886,21 @@ func (t doltDevTable) SetTableRows(ctx context.Context, rows Index) (Table, erro
 	fields.rows = rowsbytes
 	msg := fields.write()
 
-	return doltDevTable{t.vrw, msg}, nil
+	return doltDevTable{t.vrw, t.ns, msg}, nil
 }
 
 func (t doltDevTable) GetIndexes(ctx context.Context) (IndexSet, error) {
 	ambytes := t.msg.SecondaryIndexesBytes()
 	node := tree.NodeFromBytes(ambytes)
-	ns := tree.NewNodeStore(shim.ChunkStoreFromVRW(t.vrw))
-	return doltDevIndexSet{t.vrw, prolly.NewAddressMap(node, ns)}, nil
+	ns := t.ns
+	return doltDevIndexSet{t.vrw, t.ns, prolly.NewAddressMap(node, ns)}, nil
 }
 
 func (t doltDevTable) SetIndexes(ctx context.Context, indexes IndexSet) (Table, error) {
 	fields := t.fields()
 	fields.indexes = indexes.(doltDevIndexSet).am
 	msg := fields.write()
-	return doltDevTable{t.vrw, msg}, nil
+	return doltDevTable{t.vrw, t.ns, msg}, nil
 }
 
 func (t doltDevTable) GetConflicts(ctx context.Context) (conflict.ConflictSchema, ConflictIndex, error) {
@@ -844,7 +915,7 @@ func (t doltDevTable) GetConflicts(ctx context.Context) (conflict.ConflictSchema
 		if err != nil {
 			return conflict.ConflictSchema{}, nil, err
 		}
-		empty, err := NewEmptyConflictIndex(ctx, t.vrw, sch, sch, sch)
+		empty, err := NewEmptyConflictIndex(ctx, t.vrw, t.ns, sch, sch, sch)
 		if err != nil {
 			return conflict.ConflictSchema{}, nil, err
 		}
@@ -873,12 +944,12 @@ func (t doltDevTable) GetConflicts(ctx context.Context) (conflict.ConflictSchema
 	mapaddr := hash.New(conflicts.DataBytes())
 	var conflictIdx ConflictIndex
 	if mapaddr.IsEmpty() {
-		conflictIdx, err = NewEmptyConflictIndex(ctx, t.vrw, ourschema, theirschema, baseschema)
+		conflictIdx, err = NewEmptyConflictIndex(ctx, t.vrw, t.ns, ourschema, theirschema, baseschema)
 		if err != nil {
 			return conflict.ConflictSchema{}, nil, err
 		}
 	} else {
-		conflictIdx, err = conflictIndexFromAddr(ctx, t.vrw, ourschema, theirschema, baseschema, mapaddr)
+		conflictIdx, err = conflictIndexFromAddr(ctx, t.vrw, t.ns, ourschema, theirschema, baseschema, mapaddr)
 		if err != nil {
 			return conflict.ConflictSchema{}, nil, err
 		}
@@ -887,7 +958,46 @@ func (t doltDevTable) GetConflicts(ctx context.Context) (conflict.ConflictSchema
 	return conflictschema, conflictIdx, nil
 }
 
+// GetArtifacts implements Table.
+func (t doltDevTable) GetArtifacts(ctx context.Context) (ArtifactIndex, error) {
+	if t.Format() != types.Format_DOLT_1 {
+		panic("artifacts only implemented for DOLT_1")
+	}
+
+	sch, err := t.GetSchema(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	addr := hash.New(t.msg.ArtifactsBytes())
+	if addr.IsEmpty() {
+		return NewEmptyArtifactIndex(ctx, t.vrw, t.ns, sch)
+	}
+
+	return artifactIndexFromAddr(ctx, t.vrw, t.ns, sch, addr)
+}
+
+// SetArtifacts implements Table.
+func (t doltDevTable) SetArtifacts(ctx context.Context, artifacts ArtifactIndex) (Table, error) {
+	if t.Format() != types.Format_DOLT_1 {
+		panic("artifacts only implemented for DOLT_1")
+	}
+
+	var addr hash.Hash
+	if artifacts != nil && artifacts.Count() != 0 {
+		ref, err := RefFromArtifactIndex(ctx, t.vrw, artifacts)
+		if err != nil {
+			return nil, err
+		}
+		addr = ref.TargetHash()
+	}
+	msg := t.clone()
+	copy(msg.ArtifactsBytes(), addr[:])
+	return doltDevTable{t.vrw, t.ns, msg}, nil
+}
+
 func (t doltDevTable) HasConflicts(ctx context.Context) (bool, error) {
+
 	conflicts := t.msg.Conflicts(nil)
 	addr := hash.New(conflicts.OurSchemaBytes())
 	return !addr.IsEmpty(), nil
@@ -920,7 +1030,7 @@ func (t doltDevTable) SetConflicts(ctx context.Context, sch conflict.ConflictSch
 	copy(cmsg.TheirSchemaBytes(), theiraddr[:])
 	copy(cmsg.AncestorSchemaBytes(), baseaddr[:])
 
-	return doltDevTable{t.vrw, msg}, nil
+	return doltDevTable{t.vrw, t.ns, msg}, nil
 }
 
 func (t doltDevTable) ClearConflicts(ctx context.Context) (Table, error) {
@@ -931,7 +1041,7 @@ func (t doltDevTable) ClearConflicts(ctx context.Context) (Table, error) {
 	copy(conflicts.OurSchemaBytes(), emptyhash[:])
 	copy(conflicts.TheirSchemaBytes(), emptyhash[:])
 	copy(conflicts.AncestorSchemaBytes(), emptyhash[:])
-	return doltDevTable{t.vrw, msg}, nil
+	return doltDevTable{t.vrw, t.ns, msg}, nil
 }
 
 func (t doltDevTable) GetConstraintViolations(ctx context.Context) (types.Map, error) {
@@ -957,7 +1067,7 @@ func (t doltDevTable) SetConstraintViolations(ctx context.Context, violations ty
 	}
 	msg := t.clone()
 	copy(msg.ViolationsBytes(), addr[:])
-	return doltDevTable{t.vrw, msg}, nil
+	return doltDevTable{t.vrw, t.ns, msg}, nil
 }
 
 func (t doltDevTable) GetAutoIncrement(ctx context.Context) (uint64, error) {
@@ -976,7 +1086,7 @@ func (t doltDevTable) SetAutoIncrement(ctx context.Context, val uint64) (Table, 
 		fields.autoincval = val
 		msg = fields.write()
 	}
-	return doltDevTable{t.vrw, msg}, nil
+	return doltDevTable{t.vrw, t.ns, msg}, nil
 }
 
 func (t doltDevTable) clone() *serial.Table {
@@ -990,7 +1100,7 @@ func (t doltDevTable) clone() *serial.Table {
 func (t doltDevTable) fields() serialTableFields {
 	ambytes := t.msg.SecondaryIndexesBytes()
 	node := tree.NodeFromBytes(ambytes)
-	ns := tree.NewNodeStore(shim.ChunkStoreFromVRW(t.vrw))
+	ns := t.ns
 
 	conflicts := t.msg.Conflicts(nil)
 	return serialTableFields{
@@ -1002,6 +1112,7 @@ func (t doltDevTable) fields() serialTableFields {
 		conflictstheirs:   conflicts.TheirSchemaBytes(),
 		conflictsancestor: conflicts.AncestorSchemaBytes(),
 		violations:        t.msg.ViolationsBytes(),
+		artifacts:         t.msg.ArtifactsBytes(),
 		autoincval:        t.msg.AutoIncrementValue(),
 	}
 }

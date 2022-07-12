@@ -16,15 +16,19 @@ package enginetest
 
 import (
 	"context"
+	"fmt"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/dolthub/go-mysql-server/enginetest"
 	"github.com/dolthub/go-mysql-server/enginetest/queries"
 	"github.com/dolthub/go-mysql-server/enginetest/scriptgen/setup"
+	"github.com/dolthub/go-mysql-server/server"
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/expression"
+	"github.com/dolthub/go-mysql-server/sql/mysql_db"
 	"github.com/dolthub/go-mysql-server/sql/plan"
+	"github.com/dolthub/vitess/go/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -76,24 +80,96 @@ func TestSingleQuery(t *testing.T) {
 
 // Convenience test for debugging a single query. Unskip and set to the desired query.
 func TestSingleScript(t *testing.T) {
-	t.Skip()
+	// t.Skip()
 
 	var scripts = []queries.ScriptTest{
 		{
-			Name: "alter modify column type, make primary key spatial",
+			Name: "Group Concat Queries",
 			SetUpScript: []string{
-				"create table point_tbl (p int primary key)",
+				"CREATE TABLE x (pk int)",
+				"INSERT INTO x VALUES (1),(2),(3),(4),(NULL)",
+
+				"create table t (o_id int, attribute longtext, value longtext)",
+				"INSERT INTO t VALUES (2, 'color', 'red'), (2, 'fabric', 'silk')",
+				"INSERT INTO t VALUES (3, 'color', 'green'), (3, 'shape', 'square')",
+
+				"create table nulls(pk int)",
+				"INSERT INTO nulls VALUES (NULL)",
 			},
 			Assertions: []queries.ScriptTestAssertion{
 				{
-					Query:       "alter table point_tbl modify column p point primary key",
-					ExpectedErr: schema.ErrUsingSpatialKey,
+					Query:    `SELECT group_concat(pk ORDER BY pk) FROM x;`,
+					Expected: []sql.Row{{"1,2,3,4"}},
+				},
+				{
+					Query:    `SELECT group_concat(DISTINCT pk ORDER BY pk) FROM x;`,
+					Expected: []sql.Row{{"1,2,3,4"}},
+				},
+				{
+					Query:    `SELECT group_concat(DISTINCT pk ORDER BY pk SEPARATOR '-') FROM x;`,
+					Expected: []sql.Row{{"1-2-3-4"}},
+				},
+				{
+					Query:    "SELECT group_concat(`attribute` ORDER BY `attribute`) FROM t group by o_id order by o_id asc",
+					Expected: []sql.Row{{"color,fabric"}, {"color,shape"}},
+				},
+				{
+					Query:    "SELECT group_concat(DISTINCT `attribute` ORDER BY value DESC SEPARATOR ';') FROM t group by o_id order by o_id asc",
+					Expected: []sql.Row{{"fabric;color"}, {"shape;color"}},
+				},
+				{
+					Query:    "SELECT group_concat(DISTINCT `attribute` ORDER BY `attribute`) FROM t",
+					Expected: []sql.Row{{"color,fabric,shape"}},
+				},
+				{
+					Query:    "SELECT group_concat(`attribute` ORDER BY `attribute`) FROM t",
+					Expected: []sql.Row{{"color,color,fabric,shape"}},
+				},
+				{
+					Query:    `SELECT group_concat((SELECT 2)) FROM x;`,
+					Expected: []sql.Row{{"2,2,2,2,2"}},
+				},
+				{
+					Query:    `SELECT group_concat(DISTINCT (SELECT 2)) FROM x;`,
+					Expected: []sql.Row{{"2"}},
+				},
+				{
+					Query:    "SELECT group_concat(DISTINCT `attribute` ORDER BY `attribute` ASC) FROM t",
+					Expected: []sql.Row{{"color,fabric,shape"}},
+				},
+				{
+					Query:    "SELECT group_concat(DISTINCT `attribute` ORDER BY `attribute` DESC) FROM t",
+					Expected: []sql.Row{{"shape,fabric,color"}},
+				},
+				{
+					Query:    `SELECT group_concat(pk) FROM nulls`,
+					Expected: []sql.Row{{nil}},
+				},
+				{
+					Query:       `SELECT group_concat((SELECT * FROM t LIMIT 1)) from t`,
+					ExpectedErr: sql.ErrInvalidOperandColumns,
+				},
+				{
+					Query:       `SELECT group_concat((SELECT * FROM x)) from t`,
+					ExpectedErr: sql.ErrExpectedSingleRow,
+				},
+				{
+					Query:    "SELECT group_concat(`attribute`) FROM t where o_id=2 order by attribute",
+					Expected: []sql.Row{{"color,fabric"}},
+				},
+				{
+					Query:    "SELECT group_concat(DISTINCT `attribute` ORDER BY value DESC SEPARATOR ';') FROM t group by o_id order by o_id asc",
+					Expected: []sql.Row{{"fabric;color"}, {"shape;color"}},
+				},
+				{
+					Query:    "SELECT group_concat(o_id) FROM t WHERE `attribute`='color' order by o_id",
+					Expected: []sql.Row{{"2,3"}},
 				},
 			},
 		},
 	}
 
-	harness := newDoltHarness(t)
+	harness := newDoltHarness(t).WithParallelism(1)
 	harness.Setup(setup.MydbData)
 	for _, test := range scripts {
 		enginetest.TestScript(t, harness, test)
@@ -126,6 +202,53 @@ func TestSingleQueryPrepared(t *testing.T) {
 	enginetest.TestQuery(t, harness, test.Query, test.Expected, nil, nil)
 }
 
+func TestSingleScriptPrepared(t *testing.T) {
+	t.Skip()
+
+	s := []setup.SetupScript{
+		{
+			"create table test (pk int primary key, c1 int)",
+			"insert into test values (0,0), (1,1);",
+			"set @Commit1 = dolt_commit('-am', 'creating table');",
+			"call dolt_branch('-c', 'main', 'newb')",
+			"alter table test add column c2 int;",
+			"set @Commit2 = dolt_commit('-am', 'alter table');",
+		},
+	}
+	tt := queries.QueryTest{
+		Query: "select * from test as of 'HEAD~2' where pk=?",
+		Bindings: map[string]sql.Expression{
+			"v1": expression.NewLiteral(0, sql.Int8),
+		},
+		Expected: []sql.Row{{0, 0}},
+	}
+
+	harness := newDoltHarness(t)
+	harness.Setup(setup.MydbData, s)
+
+	e, err := harness.NewEngine(t)
+	defer e.Close()
+	require.NoError(t, err)
+	ctx := harness.NewContext()
+
+	//e.Analyzer.Debug = true
+	//e.Analyzer.Verbose = true
+
+	// full impl
+	pre1, sch1, rows1 := enginetest.MustQueryWithPreBindings(ctx, e, tt.Query, tt.Bindings)
+	fmt.Println(pre1, sch1, rows1)
+
+	// inline bindings
+	sch2, rows2 := enginetest.MustQueryWithBindings(ctx, e, tt.Query, tt.Bindings)
+	fmt.Println(sch2, rows2)
+
+	// no bindings
+	//sch3, rows3 := enginetest.MustQuery(ctx, e, rawQuery)
+	//fmt.Println(sch3, rows3)
+
+	enginetest.TestQueryWithContext(t, ctx, e, tt.Query, tt.Expected, tt.ExpectedColumns, tt.Bindings)
+}
+
 func TestVersionedQueries(t *testing.T) {
 	enginetest.TestVersionedQueries(t, newDoltHarness(t))
 }
@@ -133,8 +256,6 @@ func TestVersionedQueries(t *testing.T) {
 // Tests of choosing the correct execution plan independent of result correctness. Mostly useful for confirming that
 // the right indexes are being used for joining tables.
 func TestQueryPlans(t *testing.T) {
-	skipNewFormat(t)
-
 	// Dolt supports partial keys, so the index matched is different for some plans
 	// TODO: Fix these differences by implementing partial key matching in the memory tables, or the engine itself
 	skipped := []string{
@@ -146,19 +267,19 @@ func TestQueryPlans(t *testing.T) {
 		"SELECT pk,pk1,pk2 FROM one_pk LEFT JOIN two_pk ON pk=pk1 ORDER BY 1,2,3",
 		"SELECT pk,pk1,pk2 FROM one_pk t1, two_pk t2 WHERE pk=1 AND pk2=1 AND pk1=1 ORDER BY 1,2",
 	}
-
 	// Parallelism introduces Exchange nodes into the query plans, so disable.
 	// TODO: exchange nodes should really only be part of the explain plan under certain debug settings
-	enginetest.TestQueryPlans(t, newDoltHarness(t).WithParallelism(1).WithSkippedQueries(skipped))
+	harness := newDoltHarness(t).WithParallelism(1).WithSkippedQueries(skipped)
+	enginetest.TestQueryPlans(t, harness, queries.PlanTests)
 }
 
 func TestDoltDiffQueryPlans(t *testing.T) {
-	skipNewFormat(t)
 	harness := newDoltHarness(t).WithParallelism(2) // want Exchange nodes
 	harness.Setup(setup.SimpleSetup...)
 	e, err := harness.NewEngine(t)
 	require.NoError(t, err)
 	defer e.Close()
+
 	for _, tt := range DoltDiffPlanTests {
 		enginetest.TestQueryPlan(t, harness, e, tt.Query, tt.ExpectedPlan)
 	}
@@ -209,19 +330,7 @@ func TestReplaceIntoErrors(t *testing.T) {
 }
 
 func TestUpdate(t *testing.T) {
-	var skipped []string
-	if types.IsFormat_DOLT_1(types.Format_Default) {
-		// skip update for join
-		patternToSkip := "join"
-		skipped = make([]string, 0)
-		for _, q := range queries.UpdateTests {
-			if strings.Contains(strings.ToLower(q.WriteQuery), patternToSkip) {
-				skipped = append(skipped, q.WriteQuery)
-			}
-		}
-	}
-
-	enginetest.TestUpdate(t, newDoltHarness(t).WithSkippedQueries(skipped))
+	enginetest.TestUpdate(t, newDoltHarness(t))
 }
 
 func TestUpdateErrors(t *testing.T) {
@@ -251,23 +360,8 @@ func TestTruncate(t *testing.T) {
 func TestScripts(t *testing.T) {
 	var skipped []string
 	if types.IsFormat_DOLT_1(types.Format_Default) {
-		skipped = append(skipped,
-			// Different error output for primary key error
-			"failed statements data validation for INSERT, UPDATE",
-			// missing FK violation
-			"failed statements data validation for DELETE, REPLACE",
-			// wrong results
-			"Indexed Join On Keyless Table",
-			// spurious fk violation
-			"Nested Subquery projections (NTC)",
-			// Different query plans
-			"Partial indexes are used and return the expected result",
-			"Multiple indexes on the same columns in a different order",
-			// panic
-			"Ensure proper DECIMAL support (found by fuzzer)",
-		)
+		skipped = append(skipped, newFormatSkippedScripts...)
 	}
-
 	enginetest.TestScripts(t, newDoltHarness(t).WithSkippedQueries(skipped))
 }
 
@@ -285,7 +379,9 @@ func TestDoltUserPrivileges(t *testing.T) {
 				User:    "root",
 				Address: "localhost",
 			})
+
 			engine.Analyzer.Catalog.MySQLDb.AddRootAccount()
+			engine.Analyzer.Catalog.MySQLDb.SetPersister(&mysql_db.NoopPersister{})
 
 			for _, statement := range script.SetUpScript {
 				if sh, ok := interface{}(harness).(enginetest.SkippingHarness); ok {
@@ -387,6 +483,21 @@ func TestDropColumn(t *testing.T) {
 
 func TestCreateDatabase(t *testing.T) {
 	enginetest.TestCreateDatabase(t, newDoltHarness(t))
+}
+
+func TestBlobs(t *testing.T) {
+	skipOldFormat(t)
+	enginetest.TestBlobs(t, newDoltHarness(t))
+}
+
+func TestBigBlobs(t *testing.T) {
+	skipOldFormat(t)
+
+	h := newDoltHarness(t)
+	h.Setup(setup.MydbData, setup.BlobData)
+	for _, tt := range BigBlobQueries {
+		enginetest.RunWriteQueryTest(t, h, tt)
+	}
 }
 
 func TestDropDatabase(t *testing.T) {
@@ -557,23 +668,25 @@ func TestStoredProcedures(t *testing.T) {
 }
 
 func TestTransactions(t *testing.T) {
-	skipNewFormat(t)
 	for _, script := range queries.TransactionTests {
 		enginetest.TestTransactionScript(t, newDoltHarness(t), script)
 	}
-
 	for _, script := range DoltTransactionTests {
 		enginetest.TestTransactionScript(t, newDoltHarness(t), script)
 	}
-
 	for _, script := range DoltSqlFuncTransactionTests {
 		enginetest.TestTransactionScript(t, newDoltHarness(t), script)
 	}
-
 	for _, script := range DoltConflictHandlingTests {
 		enginetest.TestTransactionScript(t, newDoltHarness(t), script)
 	}
 	for _, script := range DoltConstraintViolationTransactionTests {
+		enginetest.TestTransactionScript(t, newDoltHarness(t), script)
+	}
+}
+
+func TestTransactionStomping(t *testing.T) {
+	for _, script := range DoltTransactionMergeStompTests {
 		enginetest.TestTransactionScript(t, newDoltHarness(t), script)
 	}
 }
@@ -627,9 +740,45 @@ func TestShowCreateTableAsOf(t *testing.T) {
 }
 
 func TestDoltMerge(t *testing.T) {
-	skipNewFormat(t)
 	for _, script := range MergeScripts {
 		// dolt versioning conflicts with reset harness -- use new harness every time
+		enginetest.TestScript(t, newDoltHarness(t), script)
+	}
+}
+
+func TestDoltConflictsTableNameTable(t *testing.T) {
+	for _, script := range DoltConflictDiffTypeScripts {
+		enginetest.TestScript(t, newDoltHarness(t), script)
+	}
+}
+
+// tests new format behavior for keyless merges that create CVs and conflicts
+func TestKeylessDoltMergeCVsAndConflicts(t *testing.T) {
+	if !types.IsFormat_DOLT_1(types.Format_Default) {
+		t.Skip()
+	}
+	for _, script := range KeylessMergeCVsAndConflictsScripts {
+		enginetest.TestScript(t, newDoltHarness(t), script)
+	}
+}
+
+// eventually this will be part of TestDoltMerge
+func TestDoltMergeArtifacts(t *testing.T) {
+	if !types.IsFormat_DOLT_1(types.Format_Default) {
+		t.Skip()
+	}
+	for _, script := range MergeArtifactsScripts {
+		enginetest.TestScript(t, newDoltHarness(t), script)
+	}
+}
+
+// these tests are temporary while there is a difference between the old format
+// and new format merge behaviors.
+func TestOldFormatMergeConflictsAndCVs(t *testing.T) {
+	if types.IsFormat_DOLT_1(types.Format_Default) {
+		t.Skip()
+	}
+	for _, script := range OldFormatMergeConflictsAndCVsScripts {
 		enginetest.TestScript(t, newDoltHarness(t), script)
 	}
 }
@@ -643,6 +792,12 @@ func TestDoltReset(t *testing.T) {
 
 func TestDoltBranch(t *testing.T) {
 	for _, script := range DoltBranchScripts {
+		enginetest.TestScript(t, newDoltHarness(t), script)
+	}
+}
+
+func TestDoltTag(t *testing.T) {
+	for _, script := range DoltTagTestScripts {
 		enginetest.TestScript(t, newDoltHarness(t), script)
 	}
 }
@@ -751,7 +906,6 @@ func TestBrokenSystemTableQueries(t *testing.T) {
 }
 
 func TestHistorySystemTable(t *testing.T) {
-	skipNewFormat(t)
 	harness := newDoltHarness(t)
 	harness.Setup(setup.MydbData)
 	for _, test := range HistorySystemTableScriptTests {
@@ -836,8 +990,12 @@ func TestKeylessUniqueIndex(t *testing.T) {
 	enginetest.TestKeylessUniqueIndex(t, harness)
 }
 
+func TestTypesOverWire(t *testing.T) {
+	harness := newDoltHarness(t)
+	enginetest.TestTypesOverWire(t, harness, newSessionBuilder(harness))
+}
+
 func TestQueriesPrepared(t *testing.T) {
-	skipPreparedTests(t)
 	enginetest.TestQueriesPrepared(t, newDoltHarness(t))
 }
 
@@ -845,10 +1003,18 @@ func TestPreparedStaticIndexQuery(t *testing.T) {
 	enginetest.TestPreparedStaticIndexQuery(t, newDoltHarness(t))
 }
 
+func TestStatistics(t *testing.T) {
+	enginetest.TestStatistics(t, newDoltHarness(t))
+}
+
 func TestSpatialQueriesPrepared(t *testing.T) {
 	skipPreparedTests(t)
 
 	enginetest.TestSpatialQueriesPrepared(t, newDoltHarness(t))
+}
+
+func TestPreparedStatistics(t *testing.T) {
+	enginetest.TestStatisticsPrepared(t, newDoltHarness(t))
 }
 
 func TestVersionedQueriesPrepared(t *testing.T) {
@@ -863,34 +1029,12 @@ func TestInfoSchemaPrepared(t *testing.T) {
 
 func TestUpdateQueriesPrepared(t *testing.T) {
 	skipPreparedTests(t)
-	var skipped []string
-	if types.IsFormat_DOLT_1(types.Format_Default) {
-		// skip select join for update
-		skipped = make([]string, 0)
-		for _, q := range queries.UpdateTests {
-			if strings.Contains(strings.ToLower(q.WriteQuery), "join") {
-				skipped = append(skipped, q.WriteQuery)
-			}
-		}
-	}
-
-	enginetest.TestUpdateQueriesPrepared(t, newDoltHarness(t).WithSkippedQueries(skipped))
+	enginetest.TestUpdateQueriesPrepared(t, newDoltHarness(t))
 }
 
 func TestInsertQueriesPrepared(t *testing.T) {
 	skipPreparedTests(t)
-	var skipped []string
-	if types.IsFormat_DOLT_1(types.Format_Default) {
-		// skip keyless
-		skipped = make([]string, 0)
-		for _, q := range queries.UpdateTests {
-			if strings.Contains(strings.ToLower(q.WriteQuery), "keyless") {
-				skipped = append(skipped, q.WriteQuery)
-			}
-		}
-	}
-
-	enginetest.TestInsertQueriesPrepared(t, newDoltHarness(t).WithSkippedQueries(skipped))
+	enginetest.TestInsertQueriesPrepared(t, newDoltHarness(t))
 }
 
 func TestReplaceQueriesPrepared(t *testing.T) {
@@ -906,26 +1050,8 @@ func TestDeleteQueriesPrepared(t *testing.T) {
 func TestScriptsPrepared(t *testing.T) {
 	var skipped []string
 	if types.IsFormat_DOLT_1(types.Format_Default) {
-		skipped = append(skipped,
-			// Different error output for primary key error
-			"failed statements data validation for INSERT, UPDATE",
-			// missing FK violation
-			"failed statements data validation for DELETE, REPLACE",
-			// wrong results
-			"Indexed Join On Keyless Table",
-			// spurious fk violation
-			"Nested Subquery projections (NTC)",
-			// Different query plans
-			"Partial indexes are used and return the expected result",
-			"Multiple indexes on the same columns in a different order",
-			// panic
-			"Ensure proper DECIMAL support (found by fuzzer)",
-		)
-		for _, s := range queries.SpatialScriptTests {
-			skipped = append(skipped, s.Name)
-		}
+		skipped = append(skipped, newFormatSkippedScripts...)
 	}
-
 	skipPreparedTests(t)
 	enginetest.TestScriptsPrepared(t, newDoltHarness(t).WithSkippedQueries(skipped))
 }
@@ -1162,8 +1288,21 @@ func TestAddDropPrimaryKeys(t *testing.T) {
 	})
 }
 
-func skipNewFormat(t *testing.T) {
-	if types.IsFormat_DOLT_1(types.Format_Default) {
+func TestDoltVerifyConstraints(t *testing.T) {
+	for _, script := range DoltVerifyConstraintsTestScripts {
+		harness := newDoltHarness(t)
+		enginetest.TestScript(t, harness, script)
+	}
+}
+
+var newFormatSkippedScripts = []string{
+	// Different query plans
+	"Partial indexes are used and return the expected result",
+	"Multiple indexes on the same columns in a different order",
+}
+
+func skipOldFormat(t *testing.T) {
+	if !types.IsFormat_DOLT_1(types.Format_Default) {
 		t.Skip()
 	}
 }
@@ -1171,5 +1310,11 @@ func skipNewFormat(t *testing.T) {
 func skipPreparedTests(t *testing.T) {
 	if skipPrepared {
 		t.Skip("skip prepared")
+	}
+}
+
+func newSessionBuilder(harness *DoltHarness) server.SessionBuilder {
+	return func(ctx context.Context, conn *mysql.Conn, host string) (sql.Session, error) {
+		return harness.session, nil
 	}
 }

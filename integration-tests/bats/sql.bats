@@ -39,14 +39,10 @@ teardown() {
     teardown_common
 }
 
-@test "sql: dolt sql -q has mysql db and can create users" {
-    # there does not exist a mysql.db file
-    run ls
-    ! [[ "$output" =~ "mysql.db" ]] || false
-
+@test "sql: dolt sql -q without privilege file doesn't persist" {
     # mysql database exists and has privilege tables
     run dolt sql -q "show tables from mysql;"
-    [ "$status" -eq "0" ]
+    [ "$status" -eq 0 ]
     [[ "$output" =~ "user" ]] || false
     [[ "$output" =~ "role_edges" ]] || false
 
@@ -55,25 +51,82 @@ teardown() {
     [[ "$output" =~ "root" ]] || false
     ! [[ "$output" =~ "new_user" ]] || false
 
-    # create a new user
+    # create a new user, fails
     run dolt sql -q "create user new_user;"
-    [ "$status" -eq "0" ]
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "no privilege file specified, to persist users/grants run with --privilege-file=<file_path>" ]] || false
 
-    # there should now be a mysql.db file
+    # there shouldn't be a mysql.db file
     run ls
-    [[ "$output" =~ "mysql.db" ]] || false
+    ! [[ "$output" =~ "privs.db" ]] || false
 
-    # show users, expect root and new_user
+    # show users, expect just root user
     run dolt sql -q "select user from mysql.user;"
+    [[ "$output" =~ "root" ]] || false
+    ! [[ "$output" =~ "new_user" ]] || false
+
+    # remove privs.db just in case
+    rm -f privs.db
+}
+
+@test "sql: dolt sql -q with privilege file persists" {
+    # mysql database exists and has privilege tables
+    run dolt sql --privilege-file=privs.db -q "show tables from mysql;"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "user" ]] || false
+    [[ "$output" =~ "role_edges" ]] || false
+
+    # show users, expect just root user
+    run dolt sql --privilege-file=privs.db -q "select user from mysql.user;"
+    [[ "$output" =~ "root" ]] || false
+    ! [[ "$output" =~ "new_user" ]] || false
+
+    # create a new user, fails
+    run dolt sql --privilege-file=privs.db -q "create user new_user;"
+    [ "$status" -eq 0 ]
+
+    # show users, expect just root user
+    run dolt sql --privilege-file=privs.db -q "select user from mysql.user;"
     [[ "$output" =~ "root" ]] || false
     [[ "$output" =~ "new_user" ]] || false
 
-    # remove mysql.db just in case
-    rm -f mysql.db
+    # there should now be a mysql.db file
+    run ls
+    [[ "$output" =~ "privs.db" ]] || false
+
+    # show users, expect root and new_user
+    run dolt sql --privilege-file=privs.db -q "select user from mysql.user;"
+    [[ "$output" =~ "root" ]] || false
+    [[ "$output" =~ "new_user" ]] || false
+
+    # remove mysql.db
+    rm -f privs.db
+}
+
+@test "sql: dolt sql -q create database and specify privilege file" {
+    run dolt sql --privilege-file=privs.db -q "create database inner_db;"
+    [ "$status" -eq 0 ]
+
+    run dolt sql --privilege-file=privs.db -q "create user new_user;"
+    [ "$status" -eq 0 ]
+
+    run dolt sql --privilege-file=privs.db -q "select user from mysql.user;"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "root" ]] || false
+    [[ "$output" =~ "new_user" ]] || false
+
+    cd inner_db
+
+    run dolt sql --privilege-file=../privs.db -q "select user from mysql.user;"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "root" ]] || false
+    [[ "$output" =~ "new_user" ]] || false
+
+    cd ..
+    rm -f privs.db
 }
 
 @test "sql: errors do not write incomplete rows" {
-    skip_nbf_dolt_1
     dolt sql <<"SQL"
 CREATE TABLE test (
     pk BIGINT PRIMARY KEY,
@@ -288,17 +341,17 @@ SQL
     run dolt sql -r csv -q "select * from test order by a"
     [ $status -eq 0 ]
     [[ "$output" =~ "a,b,c,d" ]] || false
-    [[ "$output" =~ '1,1.5,1,2020-01-01 00:00:00 +0000 UTC' ]] || false
-    [[ "$output" =~ '2,2.5,2,2020-02-02 00:00:00 +0000 UTC' ]] || false
-    [[ "$output" =~ '3,,3,2020-03-03 00:00:00 +0000 UTC' ]] || false
-    [[ "$output" =~ '4,4.5,,2020-04-04 00:00:00 +0000 UTC' ]] || false
+    [[ "$output" =~ '1,1.5,1,2020-01-01 00:00:00' ]] || false
+    [[ "$output" =~ '2,2.5,2,2020-02-02 00:00:00' ]] || false
+    [[ "$output" =~ '3,,3,2020-03-03 00:00:00' ]] || false
+    [[ "$output" =~ '4,4.5,,2020-04-04 00:00:00' ]] || false
     [[ "$output" =~ '5,5.5,5,' ]] || false
     [ "${#lines[@]}" -eq 6 ]
 
     run dolt sql -r json -q "select * from test order by a"
     [ $status -eq 0 ]
     echo $output
-    [ "$output" == '{"rows": [{"a":1,"b":1.5,"c":"1","d":"2020-01-01 00:00:00 +0000 UTC"},{"a":2,"b":2.5,"c":"2","d":"2020-02-02 00:00:00 +0000 UTC"},{"a":3,"c":"3","d":"2020-03-03 00:00:00 +0000 UTC"},{"a":4,"b":4.5,"d":"2020-04-04 00:00:00 +0000 UTC"},{"a":5,"b":5.5,"c":"5"}]}' ]
+    [ "$output" == '{"rows": [{"a":1,"b":1.5,"c":"1","d":"2020-01-01 00:00:00"},{"a":2,"b":2.5,"c":"2","d":"2020-02-02 00:00:00"},{"a":3,"c":"3","d":"2020-03-03 00:00:00"},{"a":4,"b":4.5,"d":"2020-04-04 00:00:00"},{"a":5,"b":5.5,"c":"5"}]}' ]
 }
 
 @test "sql: output for escaped longtext exports properly" {
@@ -795,7 +848,6 @@ SQL
     [[ "$output" =~ 'branch not found' ]] || false
 }
 
-
 @test "sql: branch qualified DB name in select" {
     dolt add .; dolt commit -m 'commit tables'
     dolt checkout -b feature-branch
@@ -930,14 +982,20 @@ SQL
     [[ "$output" =~ "c5" ]] || false
 }
 
-@test "sql: decribe bad table name" {
+@test "sql: describe with information_schema correctly works" {
+    skip "describe does not work with information_schema tables"
+    run dolt sql -r csv -q "describe information_schema.columns"
+    [ $status -eq 0 ]
+    [ "${#lines[@]}" -eq 23 ]
+}
+
+@test "sql: describe bad table name" {
     run dolt sql -q "describe poop"
     [ $status -eq 1 ]
     [[ "$output" =~ "table not found: poop" ]] || false
 }
 
 @test "sql: alter table to add and delete a column" {
-    skip_nbf_dolt_1
     run dolt sql -q "alter table one_pk add (c6 int)"
     [ $status -eq 0 ]
     run dolt sql -q "describe one_pk"
@@ -955,7 +1013,6 @@ SQL
 }
 
 @test "sql: alter table to rename a column" {
-    skip_nbf_dolt_1
     dolt sql -q "alter table one_pk add (c6 int)"
     run dolt sql -q "alter table one_pk rename column c6 to c7"
     [ $status -eq 0 ]
@@ -966,7 +1023,6 @@ SQL
 }
 
 @test "sql: alter table change column to rename a column" {
-    skip_nbf_dolt_1
     dolt sql -q "alter table one_pk add (c6 int)"
     dolt sql -q "alter table one_pk change column c6 c7 int"
     run dolt sql -q "describe one_pk"
@@ -1056,7 +1112,6 @@ SQL
 }
 
 @test "sql: alter table modify column type failure" {
-    skip_nbf_dolt_1
     dolt sql <<SQL
 CREATE TABLE t1(pk BIGINT PRIMARY KEY, v1 INT, INDEX(v1));
 INSERT INTO t1 VALUES (0,-1),(1,1);
@@ -1066,7 +1121,6 @@ SQL
 }
 
 @test "sql: alter table modify column type no data change" {
-    skip_nbf_dolt_1
     
     # there was a bug on NULLs where it would register a change
     dolt sql <<SQL
@@ -1579,13 +1633,12 @@ SQL
     run dolt sql -q "INSERT INTO mytable values (1, b'');"
     [ "$status" -eq 0 ]
 
-    run dolt sql -q "SELECT * from mytable"
+    run dolt sql -q "SELECT pk, convert(val, unsigned) from mytable"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "1  | 0" ]] || false
 }
 
 @test "sql: dolt diff table correctly works with IN" {
-    skip_nbf_dolt_1
     dolt sql -q "CREATE TABLE mytable(pk int primary key);"
     dolt sql -q "INSERT INTO mytable VALUES (1), (2)"
     dolt commit -am "Commit 1"

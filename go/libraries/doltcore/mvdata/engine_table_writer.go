@@ -78,22 +78,30 @@ func NewSqlEngineTableWriter(ctx context.Context, dEnv *env.DoltEnv, createTable
 	})
 
 	// Simplest path would have our import path be a layer over load data
+	config := &engine.SqlEngineConfig{
+		InitialDb:    dbName,
+		IsReadOnly:   false,
+		PrivFilePath: "",
+		ServerUser:   "root",
+		ServerPass:   "",
+		Autocommit:   false, // We set autocommit == false to ensure to improve performance. Bulk import should not commit on each row.
+		Bulk:         true,
+	}
 	se, err := engine.NewSqlEngine(
 		ctx,
 		mrEnv,
 		engine.FormatCsv,
-		dbName,
-		false,
-		"",
-		"",
-		"root",
-		"",
-		false,
+		config,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer se.Close()
+
+	if se.GetUnderlyingEngine().IsReadOnly {
+		// SqlEngineTableWriter does not respect read only mode
+		return nil, analyzer.ErrReadOnlyDatabase.New(dbName)
+	}
 
 	sqlCtx, err := se.NewContext(ctx)
 	if err != nil {
@@ -104,11 +112,6 @@ func NewSqlEngineTableWriter(ctx context.Context, dEnv *env.DoltEnv, createTable
 	sqlCtx.Session.SetClient(sql.Client{User: "root", Address: "%", Capabilities: 0})
 
 	dsess.DSessFromSess(sqlCtx.Session).EnableBatchedMode()
-
-	err = sqlCtx.Session.SetSessionVariable(sqlCtx, sql.AutoCommitSessionVar, false)
-	if err != nil {
-		return nil, err
-	}
 
 	doltCreateTableSchema, err := sqlutil.FromDoltSchema(options.TableToWriteTo, createTableSchema)
 	if err != nil {

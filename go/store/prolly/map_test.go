@@ -123,8 +123,9 @@ func makeProllyMap(t *testing.T, count int) (testMap, [][2]val.Tuple) {
 		val.Type{Enc: val.Uint32Enc, Nullable: true},
 		val.Type{Enc: val.Uint32Enc, Nullable: true},
 	)
+	ns := tree.NewTestNodeStore()
 
-	tuples := tree.RandomTuplePairs(count, kd, vd)
+	tuples := tree.RandomTuplePairs(count, kd, vd, ns)
 	om := prollyMapFromTuples(t, kd, vd, tuples)
 
 	return om, tuples
@@ -136,8 +137,8 @@ func makeProllySecondaryIndex(t *testing.T, count int) (testMap, [][2]val.Tuple)
 		val.Type{Enc: val.Uint32Enc, Nullable: false},
 	)
 	vd := val.NewTupleDescriptor()
-
-	tuples := tree.RandomCompositeTuplePairs(count, kd, vd)
+	ns := tree.NewTestNodeStore()
+	tuples := tree.RandomCompositeTuplePairs(count, kd, vd, ns)
 	om := prollyMapFromTuples(t, kd, vd, tuples)
 
 	return om, tuples
@@ -234,17 +235,5 @@ func testIterAll(t *testing.T, om testMap, tuples [][2]val.Tuple) {
 }
 
 func pointRangeFromTuple(tup val.Tuple, desc val.TupleDesc) Range {
-	start := make([]RangeCut, len(desc.Types))
-	stop := make([]RangeCut, len(desc.Types))
-	for i := range start {
-		start[i].Value = tup.GetField(i)
-		start[i].Inclusive = true
-	}
-	copy(stop, start)
-
-	return Range{
-		Start: start,
-		Stop:  stop,
-		Desc:  desc,
-	}
+	return closedRange(tup, tup, desc)
 }

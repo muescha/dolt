@@ -45,15 +45,15 @@ type Extra struct {
 
 // The fixed dolt schema for the `dolt_schemas` table.
 func SchemasTableSchema() schema.Schema {
-	typeCol, err := schema.NewColumnWithTypeInfo(doltdb.SchemasTablesTypeCol, schema.DoltSchemasTypeTag, typeinfo.LegacyStringDefaultType, false, "", false, "")
+	typeCol, err := schema.NewColumnWithTypeInfo(doltdb.SchemasTablesTypeCol, schema.DoltSchemasTypeTag, typeinfo.StringDefaultType, false, "", false, "")
 	if err != nil {
 		panic(err)
 	}
-	nameCol, err := schema.NewColumnWithTypeInfo(doltdb.SchemasTablesNameCol, schema.DoltSchemasNameTag, typeinfo.LegacyStringDefaultType, false, "", false, "")
+	nameCol, err := schema.NewColumnWithTypeInfo(doltdb.SchemasTablesNameCol, schema.DoltSchemasNameTag, typeinfo.StringDefaultType, false, "", false, "")
 	if err != nil {
 		panic(err)
 	}
-	fragmentCol, err := schema.NewColumnWithTypeInfo(doltdb.SchemasTablesFragmentCol, schema.DoltSchemasFragmentTag, typeinfo.LegacyStringDefaultType, false, "", false, "")
+	fragmentCol, err := schema.NewColumnWithTypeInfo(doltdb.SchemasTablesFragmentCol, schema.DoltSchemasFragmentTag, typeinfo.StringDefaultType, false, "", false, "")
 	if err != nil {
 		panic(err)
 	}
@@ -71,11 +71,7 @@ func SchemasTableSchema() schema.Schema {
 
 // GetOrCreateDoltSchemasTable returns the `dolt_schemas` table in `db`, creating it if it does not already exist.
 func GetOrCreateDoltSchemasTable(ctx *sql.Context, db Database) (retTbl *WritableDoltTable, retErr error) {
-	root, err := db.GetRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	tbl, found, err := db.GetTableInsensitiveWithRoot(ctx, root, doltdb.SchemasTableName)
+	tbl, found, err := db.GetTableInsensitive(ctx, doltdb.SchemasTableName)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +80,10 @@ func GetOrCreateDoltSchemasTable(ctx *sql.Context, db Database) (retTbl *Writabl
 		schemasTable := tbl.(*WritableDoltTable)
 		// Old schemas table does not contain the `id` or `extra` column.
 		if !tbl.Schema().Contains(doltdb.SchemasTablesIdCol, doltdb.SchemasTableName) || !tbl.Schema().Contains(doltdb.SchemasTablesExtraCol, doltdb.SchemasTableName) {
+			root, err := db.GetRoot(ctx)
+			if err != nil {
+				return nil, err
+			}
 			root, rowsToAdd, err = migrateOldSchemasTableToNew(ctx, db, root, schemasTable)
 			if err != nil {
 				return nil, err
@@ -92,16 +92,16 @@ func GetOrCreateDoltSchemasTable(ctx *sql.Context, db Database) (retTbl *Writabl
 			return schemasTable, nil
 		}
 	}
+	root, err := db.GetRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// Create the schemas table as an empty table
 	err = db.createDoltTable(ctx, doltdb.SchemasTableName, root, SchemasTableSchema())
 	if err != nil {
 		return nil, err
 	}
-	root, err = db.GetRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	tbl, found, err = db.GetTableInsensitiveWithRoot(ctx, root, doltdb.SchemasTableName)
+	tbl, found, err = db.GetTableInsensitive(ctx, doltdb.SchemasTableName)
 	if err != nil {
 		return nil, err
 	}
@@ -123,11 +123,7 @@ func GetOrCreateDoltSchemasTable(ctx *sql.Context, db Database) (retTbl *Writabl
 		return nil, err
 	}
 	// If there was an old schemas table that contained rows, then add that data here
-	root, err = db.GetRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	tbl, found, err = db.GetTableInsensitiveWithRoot(ctx, root, doltdb.SchemasTableName)
+	tbl, found, err = db.GetTableInsensitive(ctx, doltdb.SchemasTableName)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +166,7 @@ func migrateOldSchemasTableToNew(
 ) {
 	// Copy all of the old data over and add an index column and an extra column
 	var rowsToAdd []sql.Row
-	table, err := schemasTable.doltTable(ctx)
+	table, err := schemasTable.DoltTable.DoltTable(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -279,12 +275,7 @@ func fragFromSchemasTable(ctx *sql.Context, tbl *WritableDoltTable, fragType str
 		return nil, false, err
 	}
 
-	dt, err := tbl.doltTable(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-
-	iter, err := index.RowIterForIndexLookup(ctx, dt, lookup, tbl.sqlSch, nil)
+	iter, err := index.RowIterForIndexLookup(ctx, tbl.DoltTable, lookup, tbl.sqlSch, nil)
 	if err != nil {
 		return nil, false, err
 	}

@@ -128,13 +128,13 @@ func (iter prollyFkPkRowIter) Next(ctx *sql.Context) (sql.Row, error) {
 	err = iter.primary.mut.Get(ctx, pkTup, func(tblKey, tblVal val.Tuple) error {
 		for from := range iter.primary.keyMap {
 			to := iter.primary.keyMap.MapOrdinal(from)
-			if nextRow[to], err = index.GetField(iter.primary.keyBld.Desc, from, tblKey); err != nil {
+			if nextRow[to], err = index.GetField(ctx, iter.primary.keyBld.Desc, from, tblKey, iter.primary.mut.NodeStore()); err != nil {
 				return err
 			}
 		}
 		for from := range iter.primary.valMap {
 			to := iter.primary.valMap.MapOrdinal(from)
-			if nextRow[to], err = index.GetField(iter.primary.valBld.Desc, from, tblVal); err != nil {
+			if nextRow[to], err = index.GetField(ctx, iter.primary.valBld.Desc, from, tblVal, iter.primary.mut.NodeStore()); err != nil {
 				return err
 			}
 		}
@@ -143,7 +143,7 @@ func (iter prollyFkPkRowIter) Next(ctx *sql.Context) (sql.Row, error) {
 	if err != nil {
 		return nil, err
 	}
-	return index.DenormalizeRow(iter.sqlSch, nextRow)
+	return nextRow, nil
 }
 
 // Close implements the interface sql.RowIter.
@@ -177,7 +177,7 @@ func (iter prollyFkKeylessRowIter) Next(ctx *sql.Context) (sql.Row, error) {
 	err = iter.primary.mut.Get(ctx, primaryKey, func(tblKey, tblVal val.Tuple) error {
 		for from := range iter.primary.valMap {
 			to := iter.primary.valMap.MapOrdinal(from)
-			if nextRow[to], err = index.GetField(iter.primary.valBld.Desc, from+1, tblVal); err != nil {
+			if nextRow[to], err = index.GetField(ctx, iter.primary.valBld.Desc, from+1, tblVal, iter.primary.mut.NodeStore()); err != nil {
 				return err
 			}
 		}
@@ -186,7 +186,7 @@ func (iter prollyFkKeylessRowIter) Next(ctx *sql.Context) (sql.Row, error) {
 	if err != nil {
 		return nil, err
 	}
-	return index.DenormalizeRow(iter.sqlSch, nextRow)
+	return nextRow, nil
 }
 
 // Close implements the interface sql.RowIter.

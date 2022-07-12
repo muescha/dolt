@@ -3,7 +3,6 @@ load $BATS_TEST_DIRNAME/helper/common.bash
 
 setup() {
     setup_common
-    skip_nbf_dolt_1
 
     TMPDIRS=$(pwd)/tmpdirs
     mkdir -p $TMPDIRS/{rem1,repo1}
@@ -159,42 +158,28 @@ teardown() {
     [[ "$output" =~ "t1" ]] || false
 }
 
-@test "sql-push: dolt_push --set-upstream transient outside of session" {
+@test "sql-push: dolt_push --set-upstream persists outside of session" {
+    skip # setting upstream run in a session should persist outside of session
     cd repo1
-    dolt sql -q "select dolt_push('-u', 'origin', 'main')"
+    dolt push
+    dolt checkout -b other
+    dolt sql -q "select dolt_push('-u', 'origin', 'other')"
 
-    cd ../repo2
-    dolt pull origin
-    run dolt sql -q "show tables" -r csv
-    [ "$status" -eq 0 ]
-    [ "${#lines[@]}" -eq 2 ]
-    [[ "$output" =~ "Table" ]] || false
-    [[ "$output" =~ "t1" ]] || false
-
-    cd ../repo1
-    # TODO persist branch config?
+    # upstream should be set still
     run dolt sql -q "select dolt_push()"
-    [ "$status" -eq 1 ]
-    [[ "$output" =~ "the current branch has no upstream branch" ]] || false
+    [ "$status" -eq 0 ]
 }
 
-@test "sql-push: CALL dolt_push --set-upstream transient outside of session" {
+@test "sql-push: CALL dolt_push --set-upstream persists outside of session" {
+    skip # setting upstream run in a session should persist outside of session
     cd repo1
-    dolt sql -q "CALL dolt_push('-u', 'origin', 'main')"
+    dolt push
+    dolt checkout -b other
+    dolt sql -q "CALL dolt_push('-u', 'origin', 'other')"
 
-    cd ../repo2
-    dolt pull origin
-    run dolt sql -q "show tables" -r csv
-    [ "$status" -eq 0 ]
-    [ "${#lines[@]}" -eq 2 ]
-    [[ "$output" =~ "Table" ]] || false
-    [[ "$output" =~ "t1" ]] || false
-
-    cd ../repo1
-    # TODO persist branch config?
+    # upstream should be set still
     run dolt sql -q "CALL dolt_push()"
-    [ "$status" -eq 1 ]
-    [[ "$output" =~ "the current branch has no upstream branch" ]] || false
+    [ "$status" -eq 0 ]
 }
 
 @test "sql-push: dolt_push --force flag" {
@@ -207,7 +192,6 @@ teardown() {
     run dolt sql -q "select dolt_push('origin', 'main')"
     [ "$status" -eq 1 ]
     [[ "$output" =~ "the tip of your current branch is behind its remote counterpart" ]] || false
-
 
     dolt sql -q "select dolt_push('--force', 'origin', 'main')"
 }
@@ -222,7 +206,6 @@ teardown() {
     run dolt sql -q "CALL dolt_push('origin', 'main')"
     [ "$status" -eq 1 ]
     [[ "$output" =~ "the tip of your current branch is behind its remote counterpart" ]] || false
-
 
     dolt sql -q "CALL dolt_push('--force', 'origin', 'main')"
 }

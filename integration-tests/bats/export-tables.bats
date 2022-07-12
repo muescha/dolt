@@ -3,7 +3,6 @@ load $BATS_TEST_DIRNAME/helper/common.bash
 
 setup() {
     setup_common
-    skip_nbf_dolt_1
 
     dolt sql <<SQL
 CREATE TABLE test_int (
@@ -16,7 +15,7 @@ CREATE TABLE test_int (
   PRIMARY KEY (pk)
 );
 CREATE TABLE test_string (
-  pk LONGTEXT NOT NULL,
+  pk varchar(20) NOT NULL,
   c1 LONGTEXT,
   c2 LONGTEXT,
   c3 LONGTEXT,
@@ -51,7 +50,7 @@ SQL
     [[ "$output" =~ "INSERT INTO \`test\` (\`pk\`,\`v1\`,\`v2\`,\`v3\`,\`v4\`) VALUES (2,'2020-04-08','12:12:12','2020','2020-04-08 12:12:12');" ]] || false
     dolt table export test test.json
     run cat test.json
-    [ "$output" = '{"rows": [{"pk":1,"v1":"2020-04-08","v2":"11:11:11","v3":"2020","v4":"2020-04-08 11:11:11"},{"pk":2,"v1":"2020-04-08","v2":"12:12:12","v3":"2020","v4":"2020-04-08 12:12:12"}]}' ]
+    [ "$output" = '{"rows": [{"pk":1,"v1":"2020-04-08","v2":"11:11:11","v3":2020,"v4":"2020-04-08 11:11:11"},{"pk":2,"v1":"2020-04-08","v2":"12:12:12","v3":2020,"v4":"2020-04-08 12:12:12"}]}' ]
 }
 
 @test "export-tables: dolt table import from stdin export to stdout" {
@@ -163,6 +162,8 @@ SQL
 }
 
 @test "export-tables: broken SQL escaping" {
+    skip "Export embeds single quote in string without escaping it https://github.com/dolthub/dolt/issues/2197"
+
     dolt sql <<SQL
 create table sets (a varchar(10) primary key, b set('one','two','three\'s'));
 insert into sets values ('abc', 'one,two'), ('def', 'two,three\'s');
@@ -172,7 +173,7 @@ SQL
 
     dolt table export sets -f export.sql
     
-    skip "Export embeds single quote in string without escaping it https://github.com/dolthub/dolt/issues/2197"
+
    
     dolt sql < export.sql
 
@@ -296,7 +297,7 @@ SQL
 
 @test "export-tables: exporting a table with datetimes can be reimported" {
    dolt sql -q "create table timetable(pk int primary key, time datetime)"
-   dolt sql -q "insert into timetable values (1, '2021-06-02 15:37:24 +0000 UTC');"
+   dolt sql -q "insert into timetable values (1, '2021-06-02 15:37:24');"
 
    run dolt table export -f timetable export.csv
    [ "$status" -eq 0 ]
@@ -308,11 +309,11 @@ SQL
    [ "$status" -eq 0 ]
 
    run dolt sql -q "SELECT * FROM timetable" -r csv
-   [[ "$output" =~ "1,2021-06-02 15:37:24 +0000 UTC" ]] ||  false
+   [[ "$output" =~ "1,2021-06-02 15:37:24" ]] ||  false
 }
 
 @test "export-tables: parquet file export check with parquet tools" {
-    skiponwindows "Has dependencies that are missing on the Jenkins Windows installation."
+    skiponwindows "Missing dependencies"
     dolt sql -q "CREATE TABLE test_table (pk int primary key, col1 text, col2 int);"
     dolt sql -q "INSERT INTO test_table VALUES (1, 'row1', 22), (2, 'row2', 33), (3, 'row3', 22);"
 
@@ -360,7 +361,7 @@ print(table.to_pandas())
 }
 
 @test "export-tables: table export datetime, bool, enum types to parquet" {
-    skiponwindows "Has dependencies that are missing on the Jenkins Windows installation."
+    skiponwindows "Missing dependencies"
     dolt sql <<SQL
 CREATE TABLE diffTypes (
   pk BIGINT PRIMARY KEY,
@@ -372,7 +373,7 @@ CREATE TABLE diffTypes (
   v6 ENUM('one', 'two', 'three')
 );
 INSERT INTO diffTypes VALUES
-    (1,'2020-04-08','11:11:11','2020','2020-04-08 11:11:11',true,'one'),
+    (1,'2020-04-08','-11:11:11','2020','2020-04-08 11:11:11',true,'one'),
     (2,'2020-04-08','12:12:12','2020','2020-04-08 12:12:12',false,'three'),
     (3,'2021-10-09','04:12:34','2019','2019-10-09 04:12:34',true,NULL);
 SQL
@@ -381,19 +382,43 @@ SQL
     [[ "$output" =~ "Successfully exported data." ]] || false
     [ -f dt.parquet ]
 
-    run parquet-tools cat --json dt.parquet > output.json
+    run parquet-tools cat --json dt.parquet
     [ "$status" -eq 0 ]
-    row1='{"pk":1,"v1":1586304000,"v2":40271000000,"v3":2020,"v4":1586344271,"v5":1,"v6":"one"}'
-    row2='{"pk":2,"v1":1586304000,"v2":43932000000,"v3":2020,"v4":1586347932,"v5":0,"v6":"three"}'
-    row3='{"pk":3,"v1":1633737600,"v2":15154000000,"v3":2019,"v4":1570594354,"v5":1}'
-    [[ "$output" =~ "$row1" ]] || false
-    [[ "$output" =~ "$row2" ]] || false
-    [[ "$output" =~ "$row3" ]] || false
+    [[ "$output" =~ '{"pk":1,"v1":1586304000000000,"v2":-40271000000000,"v3":2020,"v4":1586344271000000,"v5":1,"v6":"one"}' ]] || false
+    [[ "$output" =~ '{"pk":2,"v1":1586304000000000,"v2":43932000000000,"v3":2020,"v4":1586347932000000,"v5":0,"v6":"three"}' ]] || false
+    [[ "$output" =~ '{"pk":3,"v1":1633737600000000,"v2":15154000000000,"v3":2019,"v4":1570594354000000,"v5":1}' ]] || false
+
+    run dolt sql -q "SELECT * FROM diffTypes"
+    result=$output
+
+    dolt table import -r diffTypes dt.parquet
+    run dolt sql -q "SELECT * FROM diffTypes"
+    [ "$output" = "$result" ]
+
+    echo "import pandas as pd
+df = pd.read_parquet('dt.parquet')
+print(df)
+" > pandas_test.py
+    run python3 pandas_test.py
+    panda_result=$output
+
+    echo "import pyarrow.parquet as pq
+table = pq.read_table('dt.parquet')
+print(table.to_pandas())
+" > arrow_test.py
+    run python3 arrow_test.py
+    [ "$output" = "$panda_result" ]
+
+    echo "import pandas as pd
+df = pd.read_parquet('dt.parquet')
+print(pd.to_timedelta(df.at[0, 'v2']))
+" > timespan_test.py
+    run python3 timespan_test.py
+    [[ "$output" =~ "-1 days +12:48:49" ]] || false
 }
 
-
 @test "export-tables: table export more types to parquet" {
-    skiponwindows "Has dependencies that are missing on the Jenkins Windows installation."
+    skiponwindows "Missing dependencies"
     dolt sql <<SQL
 CREATE TABLE test (
   \`pk\` BIGINT NOT NULL,
@@ -424,7 +449,7 @@ SQL
 }
 
 @test "export-tables: table export decimal and bit types to parquet" {
-    skiponwindows "Has dependencies that are missing on the Jenkins Windows installation."
+    skiponwindows "Missing dependencies"
     dolt sql -q "CREATE TABLE more (pk BIGINT NOT NULL,v DECIMAL(9,5),b BIT(10),PRIMARY KEY (pk));"
     dolt sql -q "INSERT INTO more VALUES (1, 1234.56789, 511);"
     dolt sql -q "INSERT INTO more VALUES (2, 5235.66789, 514);"
@@ -436,10 +461,8 @@ SQL
 
     run parquet-tools cat --json more.parquet > output.json
     [ "$status" -eq 0 ]
-    row1='{"pk":1,"v":1234.57,"b":511}'
-    row2='{"pk":2,"v":5235.67,"b":514}'
-    [[ "$output" =~ "$row1" ]] || false
-    [[ "$output" =~ "$row2" ]] || false
+    [[ "$output" =~ '{"pk":1,"v":"1234.56789","b":511}' ]] || false
+    [[ "$output" =~ '{"pk":2,"v":"5235.66789","b":514}' ]] || false
 }
 
 @test "export-tables: table export to sql with null values in different sql types" {

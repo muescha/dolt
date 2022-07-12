@@ -22,9 +22,12 @@ import (
 	"math"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/prolly/message"
+	"github.com/dolthub/dolt/go/store/val"
 )
 
 func TestWriteImmutableTree(t *testing.T) {
@@ -32,10 +35,11 @@ func TestWriteImmutableTree(t *testing.T) {
 		inputSize int
 		chunkSize int
 		err       error
+		checkSum  bool
 	}{
 		{
 			inputSize: 100,
-			chunkSize: 5,
+			chunkSize: 40,
 		},
 		{
 			inputSize: 100,
@@ -47,19 +51,19 @@ func TestWriteImmutableTree(t *testing.T) {
 		},
 		{
 			inputSize: 255,
-			chunkSize: 5,
+			chunkSize: 40,
 		},
 		{
 			inputSize: 243,
-			chunkSize: 5,
+			chunkSize: 40,
 		},
 		{
 			inputSize: 47,
-			chunkSize: 3,
+			chunkSize: 40,
 		},
 		{
 			inputSize: 200,
-			chunkSize: 7,
+			chunkSize: 40,
 		},
 		{
 			inputSize: 200,
@@ -67,11 +71,46 @@ func TestWriteImmutableTree(t *testing.T) {
 		},
 		{
 			inputSize: 1,
-			chunkSize: 5,
+			chunkSize: 40,
 		},
 		{
 			inputSize: 20,
 			chunkSize: 500,
+		},
+		{
+			inputSize: 1_000,
+			chunkSize: 47,
+			checkSum:  false,
+		},
+		{
+			inputSize: 1_000,
+			chunkSize: 53,
+			checkSum:  false,
+		},
+		{
+			inputSize: 1_000,
+			chunkSize: 67,
+			checkSum:  false,
+		},
+		{
+			inputSize: 10_000,
+			chunkSize: 89,
+			checkSum:  false,
+		},
+		{
+			inputSize: 50_000_000,
+			chunkSize: 4000,
+			checkSum:  false,
+		},
+		{
+			inputSize: 50_000_000,
+			chunkSize: 32_000,
+			checkSum:  false,
+		},
+		{
+			inputSize: 50_000_000,
+			chunkSize: 33_000,
+			err:       ErrInvalidChunkSize,
 		},
 		{
 			inputSize: 10,
@@ -81,6 +120,11 @@ func TestWriteImmutableTree(t *testing.T) {
 		{
 			inputSize: 10,
 			chunkSize: -1,
+			err:       ErrInvalidChunkSize,
+		},
+		{
+			inputSize: 10,
+			chunkSize: 39,
 			err:       ErrInvalidChunkSize,
 		},
 	}
@@ -107,6 +151,8 @@ func TestWriteImmutableTree(t *testing.T) {
 			expSum := expectedSum(tt.inputSize)
 			expUnfilled := expectedUnfilled(tt.inputSize, tt.chunkSize)
 
+			intChunkSize := int(math.Ceil(float64(tt.chunkSize) / float64(hash.ByteLen)))
+
 			unfilledCnt := 0
 			sum := 0
 			byteCnt := 0
@@ -118,52 +164,70 @@ func TestWriteImmutableTree(t *testing.T) {
 						sum += int(i)
 					}
 					keyCnt = len(n.values.Buf)
+					if keyCnt != tt.chunkSize {
+						unfilledCnt += 1
+					}
 				} else {
 					keyCnt = n.Count()
-				}
-				if keyCnt != tt.chunkSize {
-					unfilledCnt += 1
+					if keyCnt < intChunkSize {
+						unfilledCnt += 1
+					}
 				}
 				return nil
 			})
 
-			require.Equal(t, expLevel, root.Level())
-			require.Equal(t, expSum, sum)
-			require.Equal(t, tt.inputSize, byteCnt)
-			require.Equal(t, expUnfilled, unfilledCnt)
-			require.Equal(t, expSubtrees, root.getSubtreeCounts())
+			assert.Equal(t, expLevel, root.Level())
+			if tt.checkSum {
+				assert.Equal(t, expSum, sum)
+			}
+			assert.Equal(t, tt.inputSize, byteCnt)
+			assert.Equal(t, expUnfilled, unfilledCnt)
+			if expLevel > 0 {
+				for i := range expSubtrees {
+					assert.Equal(t, expSubtrees[i], root.getSubtreeCount(i))
+				}
+			}
 		})
 	}
 }
 
 func expectedLevel(size, chunk int) int {
-	l := 0
-	for size > chunk {
-		size = size / chunk
+	if size <= chunk {
+		return 0
+	}
+	size = int(math.Ceil(float64(size) / float64(chunk)))
+	l := 1
+	intChunk := int(math.Ceil(float64(chunk) / float64(hash.ByteLen)))
+	for size > intChunk {
+		size = int(math.Ceil(float64(size) / float64(intChunk)))
 		l += 1
 	}
 	return l
 }
 
-func expectedSubtrees(size, chunk int) SubtreeCounts {
+func expectedSubtrees(size, chunk int) subtreeCounts {
 	if size <= chunk {
-		return SubtreeCounts{0}
+		return subtreeCounts{0}
 	}
+	l := expectedLevel(size, chunk)
+
 	size = int(math.Ceil(float64(size) / float64(chunk)))
-	l := chunk
-	for l < size {
-		l *= chunk
-	}
-	l /= chunk
+	intChunk := int(math.Ceil(float64(chunk) / float64(hash.ByteLen)))
 
-	res := make(SubtreeCounts, 0)
-	for size > l {
-		res = append(res, uint64(l))
-		size -= l
-	}
-	res = append(res, uint64(size))
+	filledSubtree := int(math.Pow(float64(intChunk), float64(l-1)))
 
-	return res
+	subtrees := make(subtreeCounts, 0)
+	for size > filledSubtree {
+		subtrees = append(subtrees, uint64(filledSubtree))
+		size -= filledSubtree
+	}
+	if size > 0 {
+		subtrees = append(subtrees, uint64(size))
+	}
+	if len(subtrees) > intChunk {
+		panic("unreachable")
+	}
+	return subtrees
 }
 
 func expectedSum(size int) int {
@@ -171,28 +235,152 @@ func expectedSum(size int) int {
 }
 
 func expectedUnfilled(size, chunk int) int {
-	l := chunk
-	for l < size {
-		l *= chunk
+	if size == chunk {
+		return 0
+	} else if size < chunk {
+		return 1
 	}
-	l /= chunk
-	size -= l
-	cnt := 0
-	i := 1
-	for size > 0 {
-		if l > size {
-			if i < chunk-1 {
-				cnt += 1
-			}
-			l /= chunk
-			i = 0
-		} else {
-			size -= l
-			i++
+
+	var unfilled int
+	// level 0 is special case
+	if size%chunk != 0 {
+		unfilled += 1
+	}
+	size = int(math.Ceil(float64(size) / float64(chunk)))
+
+	intChunk := int(math.Ceil(float64(chunk) / float64(hash.ByteLen)))
+	for size > intChunk {
+		if size%intChunk != 0 {
+			unfilled += 1
 		}
+		size = int(math.Ceil(float64(size) / float64(intChunk)))
 	}
-	if i < chunk {
-		cnt += 1
+	if size < intChunk {
+		unfilled += 1
 	}
-	return cnt
+	return unfilled
+}
+
+func TestImmutableTreeWalk(t *testing.T) {
+	tests := []struct {
+		blobLen   int
+		chunkSize int
+		keyCnt    int
+	}{
+		{
+			blobLen:   250,
+			chunkSize: 41,
+			keyCnt:    4,
+		},
+		{
+			blobLen:   250,
+			chunkSize: 40,
+			keyCnt:    4,
+		},
+		{
+			blobLen:   378,
+			chunkSize: 43,
+			keyCnt:    12,
+		},
+		{
+			blobLen:   5000,
+			chunkSize: 40,
+			keyCnt:    6,
+		},
+		{
+			blobLen:   1,
+			chunkSize: 40,
+			keyCnt:    6,
+		},
+		{
+			blobLen:   0,
+			chunkSize: 40,
+			keyCnt:    6,
+		},
+		{
+			blobLen:   50_000_000,
+			chunkSize: 4000,
+			keyCnt:    1,
+		},
+		{
+			blobLen:   10_000,
+			chunkSize: 83,
+			keyCnt:    6,
+		},
+	}
+
+	ns := NewTestNodeStore()
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("inputSize=%d; chunkSize=%d; keyCnt=%d", tt.blobLen, tt.chunkSize, tt.keyCnt), func(t *testing.T) {
+			r := newTree(t, ns, tt.keyCnt, tt.blobLen, tt.chunkSize)
+			var cnt int
+			walkOpaqueNodes(context.Background(), r, ns, func(ctx context.Context, n Node) error {
+				cnt++
+				return nil
+			})
+			require.Equal(t, blobAddrCnt(tt.blobLen, tt.chunkSize)*tt.keyCnt+1, cnt)
+		})
+	}
+}
+
+func blobAddrCnt(size, chunk int) int {
+	if size == 0 {
+		return 0
+	}
+	if size <= chunk {
+		return 1
+	}
+	size = int(math.Ceil(float64(size) / float64(chunk)))
+	l := 1
+	sum := size
+	intChunk := int(math.Ceil(float64(chunk) / float64(hash.ByteLen)))
+	for size > intChunk {
+		size = int(math.Ceil(float64(size) / float64(intChunk)))
+		sum += size
+		l += 1
+	}
+	return sum + 1
+}
+
+func newTree(t *testing.T, ns NodeStore, keyCnt, blobLen, chunkSize int) Node {
+	ctx := context.Background()
+
+	keyDesc := val.NewTupleDescriptor(val.Type{Enc: val.Uint32Enc})
+	valDesc := val.NewTupleDescriptor(val.Type{Enc: val.BytesAddrEnc})
+
+	tuples := make([][2]val.Tuple, keyCnt)
+	keyBld := val.NewTupleBuilder(keyDesc)
+	valBld := val.NewTupleBuilder(valDesc)
+	for i := range tuples {
+		keyBld.PutUint32(0, uint32(i))
+		tuples[i][0] = keyBld.Build(sharedPool)
+
+		b := mustNewBlob(ctx, ns, blobLen, chunkSize)
+		valBld.PutBytesAddr(0, b.Addr)
+		tuples[i][1] = valBld.Build(sharedPool)
+	}
+
+	serializer := message.ProllyMapSerializer{Pool: ns.Pool(), ValDesc: valDesc}
+	chunker, err := newEmptyChunker(ctx, ns, serializer)
+	require.NoError(t, err)
+	for _, pair := range tuples {
+		err := chunker.AddPair(ctx, Item(pair[0]), Item(pair[1]))
+		require.NoError(t, err)
+	}
+	root, err := chunker.Done(ctx)
+	require.NoError(t, err)
+	return root
+}
+
+func mustNewBlob(ctx context.Context, ns NodeStore, len, chunkSize int) *ImmutableTree {
+	buf := make([]byte, len)
+	for i := range buf {
+		buf[i] = byte(i)
+	}
+	r := bytes.NewReader(buf)
+	root, err := NewImmutableTreeFromReader(ctx, r, ns, chunkSize)
+	if err != nil {
+		panic(err)
+	}
+	return root
 }

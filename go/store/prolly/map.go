@@ -37,6 +37,12 @@ type Map struct {
 
 type DiffFn func(context.Context, tree.Diff) error
 
+type DiffSummary struct {
+	Adds, Removes        uint64
+	Changes, CellChanges uint64
+	NewSize, OldSize     uint64
+}
+
 // NewMap creates an empty prolly tree Map
 func NewMap(node tree.Node, ns tree.NodeStore, keyDesc, valDesc val.TupleDesc) Map {
 	tuples := orderedTree[val.Tuple, val.Tuple, val.TupleDesc]{
@@ -81,9 +87,33 @@ func DiffMaps(ctx context.Context, from, to Map, cb DiffFn) error {
 	return diffOrderedTrees(ctx, from.tuples, to.tuples, cb)
 }
 
+func DiffMapSummary(ctx context.Context, from, to Map) (DiffSummary, error) {
+	s := DiffSummary{
+		OldSize: uint64(from.Count()),
+		NewSize: uint64(to.Count()),
+	}
+
+	err := DiffMaps(ctx, from, to, func(ctx context.Context, diff tree.Diff) error {
+		switch diff.Type {
+		case tree.AddedDiff:
+			s.Adds++
+		case tree.RemovedDiff:
+			s.Removes++
+		case tree.ModifiedDiff:
+			s.Changes++
+			s.CellChanges += val.CellWiseTupleDiff(val.Tuple(diff.From), val.Tuple(diff.To))
+		}
+		return nil
+	})
+	if err != nil && err != io.EOF {
+		return DiffSummary{}, err
+	}
+	return s, nil
+}
+
 func MergeMaps(ctx context.Context, left, right, base Map, cb tree.CollisionFn) (Map, error) {
 	serializer := message.ProllyMapSerializer{Pool: left.tuples.ns.Pool()}
-	tuples, err := mergeOrderedTrees(ctx, left.tuples, right.tuples, base.tuples, cb, serializer)
+	tuples, err := mergeOrderedTrees(ctx, left.tuples, right.tuples, base.tuples, cb, serializer, base.valDesc)
 	if err != nil {
 		return Map{}, err
 	}
@@ -93,6 +123,11 @@ func MergeMaps(ctx context.Context, left, right, base Map, cb tree.CollisionFn) 
 		keyDesc: base.keyDesc,
 		valDesc: base.valDesc,
 	}, nil
+}
+
+// NodeStore returns the map's NodeStore
+func (m Map) NodeStore() tree.NodeStore {
+	return m.tuples.ns
 }
 
 // Mutate makes a MutableMap from a Map.
@@ -147,9 +182,14 @@ func (m Map) Last(ctx context.Context) (key, value val.Tuple, err error) {
 	return m.tuples.last(ctx)
 }
 
-// IterAll returns a mutableMapIter that iterates over the entire Map.
+// IterAll returns a MapIter that iterates over the entire Map.
 func (m Map) IterAll(ctx context.Context) (MapIter, error) {
 	return m.tuples.iterAll(ctx)
+}
+
+// IterAllReverse returns a MapIter that iterates over the entire Map from the end to the beginning.
+func (m Map) IterAllReverse(ctx context.Context) (MapIter, error) {
+	return m.tuples.iterAllReverse(ctx)
 }
 
 // IterOrdinalRange returns a MapIter for the ordinal range beginning at |start| and ending before |stop|.
@@ -161,9 +201,13 @@ func (m Map) IterOrdinalRange(ctx context.Context, start, stop uint64) (MapIter,
 func (m Map) IterRange(ctx context.Context, rng Range) (MapIter, error) {
 	if rng.isPointLookup(m.keyDesc) {
 		return m.pointLookupFromRange(ctx, rng)
-	} else {
-		return m.iterFromRange(ctx, rng)
 	}
+
+	iter, err := treeIterFromRange(ctx, m.tuples.root, m.tuples.ns, rng)
+	if err != nil {
+		return nil, err
+	}
+	return filteredIter{iter: iter, rng: rng}, nil
 }
 
 func (m Map) Node() tree.Node {
@@ -176,8 +220,7 @@ func (m Map) Pool() pool.BuffPool {
 }
 
 func (m Map) pointLookupFromRange(ctx context.Context, rng Range) (*pointLookup, error) {
-	search := pointLookupSearchFn(rng)
-	cur, err := tree.NewCursorFromSearchFn(ctx, m.tuples.ns, m.tuples.root, search)
+	cur, err := tree.NewCursorFromSearchFn(ctx, m.tuples.ns, m.tuples.root, rangeStartSearchFn(rng))
 	if err != nil {
 		return nil, err
 	}
@@ -188,16 +231,12 @@ func (m Map) pointLookupFromRange(ctx context.Context, rng Range) (*pointLookup,
 
 	key := val.Tuple(cur.CurrentKey())
 	value := val.Tuple(cur.CurrentValue())
-	if compareBound(rng.Start, key, m.keyDesc) != 0 {
-		// map does not contain |rng|
+
+	if !rng.matches(key) {
 		return &pointLookup{}, nil
 	}
 
 	return &pointLookup{k: key, v: value}, nil
-}
-
-func (m Map) iterFromRange(ctx context.Context, rng Range) (*orderedTreeIter[val.Tuple, val.Tuple], error) {
-	return treeIterFromRange(ctx, m.tuples.root, m.tuples.ns, rng)
 }
 
 func treeIterFromRange(
@@ -212,31 +251,25 @@ func treeIterFromRange(
 		stop  *tree.Cursor
 	)
 
-	startSearch := rangeStartSearchFn(rng)
-	if rng.Start == nil {
-		start, err = tree.NewCursorAtStart(ctx, ns, root)
-	} else {
-		start, err = tree.NewCursorFromSearchFn(ctx, ns, root, startSearch)
-	}
+	start, err = tree.NewCursorFromSearchFn(ctx, ns, root, rangeStartSearchFn(rng))
 	if err != nil {
 		return nil, err
 	}
 
-	stopSearch := rangeStopSearchFn(rng)
-	if rng.Stop == nil {
-		stop, err = tree.NewCursorPastEnd(ctx, ns, root)
-	} else {
-		stop, err = tree.NewCursorFromSearchFn(ctx, ns, root, stopSearch)
-	}
+	stop, err = tree.NewCursorFromSearchFn(ctx, ns, root, rangeStopSearchFn(rng))
 	if err != nil {
 		return nil, err
 	}
 
-	if start.Compare(stop) >= 0 {
+	stopF := func(curr *tree.Cursor) bool {
+		return curr.Compare(stop) >= 0
+	}
+
+	if stopF(start) {
 		start = nil // empty range
 	}
 
-	return &orderedTreeIter[val.Tuple, val.Tuple]{curr: start, stop: stop}, nil
+	return &orderedTreeIter[val.Tuple, val.Tuple]{curr: start, stop: stopF, step: start.Advance}, nil
 }
 
 type pointLookup struct {
@@ -291,8 +324,8 @@ func DebugFormat(ctx context.Context, m Map) (string, error) {
 	return sb.String(), nil
 }
 
-// ConvertToKeylessIndex converts the given map to a keyless index map.
-func ConvertToKeylessIndex(m Map) Map {
+// ConvertToSecondaryKeylessIndex converts the given map to a keyless index map.
+func ConvertToSecondaryKeylessIndex(m Map) Map {
 	keyDesc, valDesc := m.Descriptors()
 	newTypes := make([]val.Type, len(keyDesc.Types)+1)
 	copy(newTypes, keyDesc.Types)

@@ -5,7 +5,6 @@ load $BATS_TEST_DIRNAME/helper/common.bash
 
 setup() {
   setup_common
-  skip_nbf_dolt_1
 
   mkdir test
   cd test
@@ -14,11 +13,11 @@ setup() {
   # Load in a complex database
   dolt sql <<SQL
 CREATE TABLE \`default_table\` (
-  \`pk\` int NOT NULL DEFAULT "2",
-  \`col2\` float NOT NULL DEFAULT (LENGTH("hello")) COMMENT 'fsdsdf',
+  \`pk\` int NOT NULL DEFAULT '2',
+  \`col2\` float NOT NULL DEFAULT (LENGTH('hello')) COMMENT 'fsdsdf',
   \`col3\` double NOT NULL DEFAULT (ROUND(-1.58, 0)),
   \`col4\` float DEFAULT (RAND()) COMMENT 'fsdfsd',
-  \`col5\` int DEFAULT 4 COMMENT 'dass',
+  \`col5\` int DEFAULT '4' COMMENT 'dass',
   PRIMARY KEY (\`pk\`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 INSERT INTO \`default_table\` (\`pk\`,\`col2\`,\`col3\`,\`col4\`,\`col5\`) VALUES (1,5,-2,0.14581752,2);
@@ -184,7 +183,7 @@ SQL
 
   run dolt sql -r csv -q "SELECT TABLE_NAME,TABLE_SCHEMA,COLUMN_NAME,REFERENCED_TABLE_SCHEMA,REFERENCED_TABLE_NAME,REFERENCED_COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA='test' AND REFERENCED_TABLE_NAME IS NOT NULL ORDER BY ORDINAL_POSITION;"
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "table_name,table_schema,column_name,referenced_table_schema,referenced_table_name,referenced_column_name" ]] || false
+  [[ "$output" =~ "TABLE_NAME,TABLE_SCHEMA,COLUMN_NAME,REFERENCED_TABLE_SCHEMA,REFERENCED_TABLE_NAME,REFERENCED_COLUMN_NAME" ]] || false
   [[ "$output" =~ "objects,test,color,test,colors,color" ]] || false
 }
 

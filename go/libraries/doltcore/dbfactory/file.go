@@ -24,6 +24,7 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 	"github.com/dolthub/dolt/go/store/datas"
+	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/types"
 )
 
@@ -43,11 +44,11 @@ type FileFactory struct {
 }
 
 // CreateDB creates an local filesys backed database
-func (fact FileFactory) CreateDB(ctx context.Context, nbf *types.NomsBinFormat, urlObj *url.URL, params map[string]interface{}) (datas.Database, types.ValueReadWriter, error) {
+func (fact FileFactory) CreateDB(ctx context.Context, nbf *types.NomsBinFormat, urlObj *url.URL, params map[string]interface{}) (datas.Database, types.ValueReadWriter, tree.NodeStore, error) {
 	path, err := url.PathUnescape(urlObj.Path)
 
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	path = filepath.FromSlash(path)
@@ -55,17 +56,18 @@ func (fact FileFactory) CreateDB(ctx context.Context, nbf *types.NomsBinFormat, 
 
 	err = validateDir(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	st, err := chunks.NewFileStore(path, nbf.VersionString())
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	vs := types.NewValueStore(st)
+	vrw := types.NewValueStore(st)
+	ns := tree.NewNodeStore(st)
 
-	return datas.NewTypesDatabase(vs), vs, nil
+	return datas.NewTypesDatabase(vrw, ns), vrw, ns, nil
 }
 
 func validateDir(path string) error {

@@ -40,9 +40,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/libraries/utils/argparser"
 	"github.com/dolthub/dolt/go/libraries/utils/config"
-	"github.com/dolthub/dolt/go/libraries/utils/tracing"
 	"github.com/dolthub/dolt/go/store/hash"
-	"github.com/dolthub/dolt/go/store/types"
 )
 
 const (
@@ -77,14 +75,9 @@ func (cmd FilterBranchCmd) Description() string {
 	return fmt.Sprintf("%s.", filterBranchDocs.ShortDesc)
 }
 
-func (cmd FilterBranchCmd) GatedForNBF(nbf *types.NomsBinFormat) bool {
-	return types.IsFormat_DOLT_1(nbf)
-}
-
-// CreateMarkdown creates a markdown file containing the helptext for the command at the given path
-func (cmd FilterBranchCmd) CreateMarkdown(wr io.Writer, commandStr string) error {
+func (cmd FilterBranchCmd) Docs() *cli.CommandDocumentation {
 	ap := cmd.ArgParser()
-	return CreateMarkdown(wr, cli.GetCommandDocumentation(commandStr, filterBranchDocs, ap))
+	return cli.NewCommandDocumentation(filterBranchDocs, ap)
 }
 
 func (cmd FilterBranchCmd) ArgParser() *argparser.ArgParser {
@@ -101,13 +94,17 @@ func (cmd FilterBranchCmd) EventType() eventsapi.ClientEventType {
 // Exec executes the command
 func (cmd FilterBranchCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cmd.ArgParser()
-	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, filterBranchDocs, ap))
+	help, usage := cli.HelpAndUsagePrinters(cli.CommandDocsForCommandString(commandStr, filterBranchDocs, ap))
 	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	if apr.NArg() < 1 || apr.NArg() > 2 {
 		args := strings.Join(apr.Args, ", ")
 		verr := errhand.BuildDError("%s takes 1 or 2 args, %d provided: %s", cmd.Name(), apr.NArg(), args).Build()
 		return HandleVErrAndExitCode(verr, usage)
+	}
+
+	if dEnv.IsLocked() {
+		return HandleVErrAndExitCode(errhand.VerboseErrorFromError(env.ErrActiveServerLock.New(dEnv.LockFile())), help)
 	}
 
 	query := apr.Arg(0)
@@ -231,9 +228,7 @@ func processFilterQuery(ctx context.Context, dEnv *env.DoltEnv, cm *doltdb.Commi
 func rebaseSqlEngine(ctx context.Context, dEnv *env.DoltEnv, cm *doltdb.Commit) (*sql.Context, *engine.SqlEngine, error) {
 	sess := dsess.DefaultSession().NewDoltSession(config.NewMapConfig(make(map[string]string)))
 
-	sqlCtx := sql.NewContext(ctx,
-		sql.WithSession(sess),
-		sql.WithTracer(tracing.Tracer(ctx)))
+	sqlCtx := sql.NewContext(ctx, sql.WithSession(sess))
 	err := sqlCtx.SetSessionVariable(sqlCtx, sql.AutoCommitSessionVar, false)
 	if err != nil {
 		return nil, nil, err

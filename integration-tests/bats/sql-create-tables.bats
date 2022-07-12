@@ -213,7 +213,6 @@ SQL
     [[ "$output" =~ "PRIMARY KEY (\`pk\`)" ]] || false
 }
 
-
 @test "sql-create-tables: create a table using sql with a string" {
     run dolt sql <<SQL
 CREATE TABLE test (
@@ -230,7 +229,6 @@ SQL
     [[ "$output" =~ "\`c1\` longtext" ]] || false
     [[ "$output" =~ "PRIMARY KEY (\`pk\`)" ]] || false
 }
-
 
 @test "sql-create-tables: create a table using sql with an unsigned int" {
     run dolt sql -q "CREATE TABLE test (pk BIGINT NOT NULL, c1 BIGINT UNSIGNED, PRIMARY KEY (pk))"
@@ -306,7 +304,6 @@ SQL
     [[ "$output" =~ "date" ]] || false
 }
 
-
 @test "sql-create-tables: create two table with the same name" {
     dolt sql <<SQL
 CREATE TABLE test (
@@ -346,7 +343,7 @@ SQL
     [ "$status" -eq 0 ]
     [[ "$output" =~ "CREATE TABLE \`test2\`" ]] || false
     [[ "$output" =~ "\`pk\` bigint NOT NULL" ]] || false
-    [[ "$output" =~ "\`c1\` bigint DEFAULT 5 COMMENT 'hi'" ]] || false
+    [[ "$output" =~ "\`c1\` bigint DEFAULT '5' COMMENT 'hi'" ]] || false
     [[ "$output" =~ "PRIMARY KEY (\`pk\`)" ]] || false
 }
 
@@ -534,7 +531,6 @@ SQL
     [[ "$output" =~ "On branch main" ]] || false
     [[ "$output" =~ "nothing to commit, working tree clean" ]] || false
 }
-
 
 @test "sql-create-tables: You can create a temp table of the same name as a normal table. Run it through operations" {
     run dolt sql <<SQL

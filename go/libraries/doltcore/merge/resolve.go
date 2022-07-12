@@ -27,6 +27,8 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/table"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/libraries/utils/set"
+	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/types"
 )
 
@@ -40,7 +42,7 @@ func Theirs(key types.Value, cnf conflict.Conflict) (types.Value, error) {
 	return cnf.MergeValue, nil
 }
 
-func ResolveTable(ctx context.Context, vrw types.ValueReadWriter, tblName string, root *doltdb.RootValue, autoResFunc AutoResolver, opts editor.Options) (*doltdb.RootValue, error) {
+func ResolveTable(ctx context.Context, vrw types.ValueReadWriter, ns tree.NodeStore, tblName string, root *doltdb.RootValue, autoResFunc AutoResolver, opts editor.Options) (*doltdb.RootValue, error) {
 	tbl, ok, err := root.GetTable(ctx, tblName)
 	if err != nil {
 		return nil, err
@@ -74,7 +76,7 @@ func ResolveTable(ctx context.Context, vrw types.ValueReadWriter, tblName string
 		return nil, err
 	}
 
-	confIdx, err := durable.NewEmptyConflictIndex(ctx, vrw, schemas.Schema, schemas.MergeSchema, schemas.Base)
+	confIdx, err := durable.NewEmptyConflictIndex(ctx, vrw, ns, schemas.Schema, schemas.MergeSchema, schemas.Base)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +247,8 @@ func validateConstraintViolations(ctx context.Context, before, after *doltdb.Roo
 		return err
 	}
 
-	_, violators, err := AddConstraintViolations(ctx, after, before, set.NewStrSet(tables))
+	// TODO: fix resolve in the new storage format
+	_, violators, err := AddForeignKeyViolations(ctx, after, before, set.NewStrSet(tables), hash.Of(nil))
 	if err != nil {
 		return err
 	}
@@ -289,7 +292,7 @@ func autoResolve(ctx context.Context, dEnv *env.DoltEnv, root *doltdb.RootValue,
 	var err error
 	opts := editor.Options{Deaf: dEnv.DbEaFactory(), Tempdir: dEnv.TempTableFilesDir()}
 	for _, tblName := range tbls {
-		root, err = ResolveTable(ctx, root.VRW(), tblName, root, autoResolver, opts)
+		root, err = ResolveTable(ctx, root.VRW(), root.NodeStore(), tblName, root, autoResolver, opts)
 		if err != nil {
 			return err
 		}

@@ -22,6 +22,7 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/store/prolly"
+	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/val"
 )
 
@@ -50,6 +51,7 @@ var encodingToType [256]query.Type
 
 type prollyRowIter struct {
 	iter prolly.MapIter
+	ns   tree.NodeStore
 
 	sqlSch  sql.Schema
 	keyDesc val.TupleDesc
@@ -62,22 +64,12 @@ type prollyRowIter struct {
 var _ sql.RowIter = prollyRowIter{}
 var _ sql.RowIter2 = prollyRowIter{}
 
-func NewProllyRowIter(
-	sch schema.Schema,
-	schSch sql.Schema,
-	rows prolly.Map,
-	iter prolly.MapIter,
-	projections []string,
-) (sql.RowIter, error) {
+func NewProllyRowIter(sch schema.Schema, sqlSch sql.Schema, rows prolly.Map, iter prolly.MapIter, projections []string) (sql.RowIter, error) {
+	if len(projections) == 0 {
+		projections = sch.GetAllCols().GetColumnNames()
+	}
 
-	// todo(andy): NomsRangeReader seemingly ignores projections
-	//if projections == nil {
-	//	projections = sch.GetAllCols().GetColumnNames()
-	//}
-
-	projections = sch.GetAllCols().GetColumnNames()
 	keyProj, valProj := projectionMappings(sch, projections)
-
 	kd, vd := rows.Descriptors()
 
 	if schema.IsKeyless(sch) {
@@ -85,52 +77,53 @@ func NewProllyRowIter(
 			iter:    iter,
 			valDesc: vd,
 			valProj: valProj,
-			rowLen:  len(projections),
+			rowLen:  len(sqlSch),
+			ns:      rows.NodeStore(),
 		}, nil
 	}
 
 	return prollyRowIter{
 		iter:    iter,
-		sqlSch:  schSch,
+		sqlSch:  sqlSch,
 		keyDesc: kd,
 		valDesc: vd,
 		keyProj: keyProj,
 		valProj: valProj,
-		rowLen:  len(projections),
+		rowLen:  sch.GetAllCols().Size(),
+		ns:      rows.NodeStore(),
 	}, nil
 }
 
-func projectionMappings(sch schema.Schema, projs []string) (keyMap, valMap val.OrdinalMapping) {
+func projectionMappings(sch schema.Schema, projections []string) (keyMap, valMap val.OrdinalMapping) {
 	keyMap = make(val.OrdinalMapping, sch.GetPKCols().Size())
-	for idx := range keyMap {
-		keyMap[idx] = -1
-		idxCol := sch.GetPKCols().GetAtIndex(idx)
-		for j, proj := range projs {
-			if strings.ToLower(idxCol.Name) == strings.ToLower(proj) {
-				keyMap[idx] = j
-				break
-			}
-		}
+	for i := range keyMap {
+		keyMap[i] = -1
 	}
-
 	valMap = make(val.OrdinalMapping, sch.GetNonPKCols().Size())
-	for idx := range valMap {
-		valMap[idx] = -1
-		idxCol := sch.GetNonPKCols().GetAtIndex(idx)
-		for j, proj := range projs {
-			if strings.ToLower(idxCol.Name) == strings.ToLower(proj) {
-				valMap[idx] = j
-				break
-			}
-		}
+	for i := range valMap {
+		valMap[i] = -1
 	}
 
+	all := sch.GetAllCols()
+	pks := sch.GetPKCols()
+	nonPks := sch.GetNonPKCols()
+
+	for _, p := range projections {
+		p = strings.ToLower(p)
+		if col, ok := pks.LowerNameToCol[p]; ok {
+			i := pks.TagToIdx[col.Tag]
+			keyMap[i] = all.TagToIdx[col.Tag]
+		}
+		if col, ok := nonPks.LowerNameToCol[p]; ok {
+			i := nonPks.TagToIdx[col.Tag]
+			valMap[i] = all.TagToIdx[col.Tag]
+		}
+	}
 	if schema.IsKeyless(sch) {
 		skip := val.OrdinalMapping{-1}
 		keyMap = append(skip, keyMap...) // hashId
 		valMap = append(skip, valMap...) // cardinality
 	}
-
 	return
 }
 
@@ -146,7 +139,7 @@ func (it prollyRowIter) Next(ctx *sql.Context) (sql.Row, error) {
 		if rowIdx == -1 {
 			continue
 		}
-		row[rowIdx], err = GetField(it.keyDesc, keyIdx, key)
+		row[rowIdx], err = GetField(ctx, it.keyDesc, keyIdx, key, it.ns)
 		if err != nil {
 			return nil, err
 		}
@@ -155,12 +148,12 @@ func (it prollyRowIter) Next(ctx *sql.Context) (sql.Row, error) {
 		if rowIdx == -1 {
 			continue
 		}
-		row[rowIdx], err = GetField(it.valDesc, valIdx, value)
+		row[rowIdx], err = GetField(ctx, it.valDesc, valIdx, value, it.ns)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return DenormalizeRow(it.sqlSch, row)
+	return row, nil
 }
 
 func (it prollyRowIter) Next2(ctx *sql.Context, frame *sql.RowFrame) error {
@@ -205,6 +198,7 @@ func (it prollyRowIter) Close(ctx *sql.Context) error {
 
 type prollyKeylessIter struct {
 	iter prolly.MapIter
+	ns   tree.NodeStore
 
 	valDesc val.TupleDesc
 	valProj []int
@@ -243,7 +237,7 @@ func (it *prollyKeylessIter) nextTuple(ctx *sql.Context) error {
 		if rowIdx == -1 {
 			continue
 		}
-		it.curr[rowIdx], err = GetField(it.valDesc, valIdx, value)
+		it.curr[rowIdx], err = GetField(ctx, it.valDesc, valIdx, value, it.ns)
 		if err != nil {
 			return err
 		}

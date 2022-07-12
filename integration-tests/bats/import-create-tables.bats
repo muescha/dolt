@@ -112,13 +112,15 @@ teardown() {
     run dolt table import -c --pk=pk test people.csv
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Import completed successfully." ]] || false
+    # Sanity Check
+    ! [[ "$output" =~ "Warning: There are fewer columns in the import file's schema than the table's schema" ]] || false
+
     run dolt sql -q "select * from test"
     [ "$status" -eq 0 ]
     [ "${#lines[@]}" -eq 8 ]
 }
 
 @test "import-create-tables: use -f to overwrite data in existing table" {
-    skip_nbf_dolt_1
     cat <<DELIM > other.csv
 pk,c1,c2,c3,c4,c5
 8,1,2,3,4,5
@@ -144,7 +146,6 @@ DELIM
 }
 
 @test "import-create-tables: use -f to overwrite data in existing table with fk constraints" {
-    skip_nbf_dolt_1
     cat <<DELIM > other.csv
 pk,c1,c2,c3,c4,c5
 8,1,2,3,4,5
@@ -394,7 +395,6 @@ DELIM
 }
 
 @test "import-create-tables: dolt diff on a newly created table" {
-    skip_nbf_dolt_1
     dolt sql <<SQL
 CREATE TABLE test (
   pk BIGINT NOT NULL,
@@ -482,7 +482,7 @@ SQL
 @test "import-create-tables: create a table with null values from json import with json file" {
     dolt sql <<SQL
 CREATE TABLE test (
-  pk LONGTEXT NOT NULL,
+  pk varchar(20) NOT NULL,
   headerOne LONGTEXT,
   headerTwo BIGINT,
   PRIMARY KEY (pk)
@@ -509,7 +509,7 @@ SQL
 @test "import-create-tables: fail to create a table with null values from json import with json file" {
     dolt sql <<SQL
 CREATE TABLE test (
-  pk LONGTEXT NOT NULL,
+  pk varchar(20) NOT NULL,
   headerOne LONGTEXT NOT NULL,
   headerTwo BIGINT NOT NULL,
   PRIMARY KEY (pk)
@@ -539,7 +539,6 @@ DELIM
 }
 
 @test "import-create-tables: table import -c infers types from data" {
-    skip_nbf_dolt_1
     cat <<DELIM > types.csv
 pk,str,int,bool,float, date, time, datetime
 0,abc,123,false,3.14,2020-02-02,12:12:12.12,2020-02-02 12:12:12
@@ -560,7 +559,6 @@ DELIM
 }
 
 @test "import-create-tables: table import -c collects garbage" {
-    skip_nbf_dolt_1
     echo "pk" > pk.csv
     seq 0 100000 >> pk.csv
 
@@ -569,6 +567,7 @@ DELIM
 
     # assert that we already collected garbage
     BEFORE=$(du -c .dolt/noms/ | grep total | sed 's/[^0-9]*//g')
+    skip_nbf_dolt_1 "dolt gc not implemented"
     dolt gc
     AFTER=$(du -c .dolt/noms/ | grep total | sed 's/[^0-9]*//g')
 
@@ -664,7 +663,7 @@ DELIM
     [ "${lines[1]}" = "0,1,2" ]
 }
 
-@test "import-create-tables: csv files has less columns filled with default value" {
+@test "import-create-tables: csv files has fewer columns filled with default value" {
     cat <<SQL > schema.sql
 CREATE TABLE subset (
     pk INT NOT NULL,
@@ -680,6 +679,7 @@ DELIM
 
     run dolt table import -s schema.sql -c subset data.csv
     [ "$status" -eq 0 ]
+    [[ "$output" =~ "Warning: There are fewer columns in the import file's schema than the table's schema" ]] || false
 
     # schema argument subsets the data and adds empty column
     run dolt sql -r csv -q "select * from subset ORDER BY pk"

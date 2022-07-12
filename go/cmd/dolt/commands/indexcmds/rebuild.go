@@ -16,15 +16,14 @@ package indexcmds
 
 import (
 	"context"
-	"io"
-
-	"github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
+	"github.com/dolthub/dolt/go/cmd/dolt/commands"
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/libraries/utils/argparser"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 var rebuildDocs = cli.CommandDocumentationContent{
@@ -52,7 +51,7 @@ func (cmd RebuildCmd) GatedForNBF(nbf *types.NomsBinFormat) bool {
 	return types.IsFormat_DOLT_1(nbf)
 }
 
-func (cmd RebuildCmd) CreateMarkdown(_ io.Writer, _ string) error {
+func (cmd RebuildCmd) Docs() *cli.CommandDocumentation {
 	return nil
 }
 
@@ -65,7 +64,7 @@ func (cmd RebuildCmd) ArgParser() *argparser.ArgParser {
 
 func (cmd RebuildCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cmd.ArgParser()
-	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, rebuildDocs, ap))
+	help, usage := cli.HelpAndUsagePrinters(cli.CommandDocsForCommandString(commandStr, rebuildDocs, ap))
 	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	if apr.NArg() == 0 {
@@ -73,6 +72,10 @@ func (cmd RebuildCmd) Exec(ctx context.Context, commandStr string, args []string
 		return 0
 	} else if apr.NArg() != 2 {
 		return HandleErr(errhand.BuildDError("Both the table and index names must be provided.").Build(), usage)
+	}
+
+	if dEnv.IsLocked() {
+		return commands.HandleVErrAndExitCode(errhand.VerboseErrorFromError(env.ErrActiveServerLock.New(dEnv.LockFile())), usage)
 	}
 
 	working, err := dEnv.WorkingRoot(context.Background())

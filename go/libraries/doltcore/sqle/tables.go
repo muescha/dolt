@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dolthub/go-mysql-server/sql"
 
@@ -74,6 +75,37 @@ type projected interface {
 	Project() []string
 }
 
+// DoltTableStatistics holds the statistics for dolt tables
+type DoltTableStatistics struct {
+	rowCount     uint64
+	createdAt    time.Time
+	histogramMap sql.HistogramMap
+}
+
+var _ sql.TableStatistics = &DoltTableStatistics{}
+
+func (ds *DoltTableStatistics) CreatedAt() time.Time {
+	return ds.createdAt
+}
+
+func (ds *DoltTableStatistics) RowCount() uint64 {
+	return ds.rowCount
+}
+
+func (ds *DoltTableStatistics) Histogram(colName string) (*sql.Histogram, error) {
+	if res, ok := ds.histogramMap[colName]; ok {
+		return res, nil
+	}
+	return &sql.Histogram{}, fmt.Errorf("column %s not found", colName)
+}
+
+func (ds *DoltTableStatistics) HistogramMap() sql.HistogramMap {
+	if len(ds.histogramMap) == 0 {
+		return nil
+	}
+	return ds.histogramMap
+}
+
 // DoltTable implements the sql.Table interface and gives access to dolt table rows and schema.
 type DoltTable struct {
 	tableName    string
@@ -87,6 +119,8 @@ type DoltTable struct {
 	projectedCols []string
 
 	opts editor.Options
+
+	doltStats *DoltTableStatistics
 }
 
 func NewDoltTable(name string, sch schema.Schema, tbl *doltdb.Table, db SqlDatabase, opts editor.Options) (*DoltTable, error) {
@@ -119,9 +153,44 @@ func NewDoltTable(name string, sch schema.Schema, tbl *doltdb.Table, db SqlDatab
 // LockedToRoot returns a version of this table with its root value locked to the given value. The table's values will
 // not change as the session's root value changes. Appropriate for AS OF queries, or other use cases where the table's
 // values should not change throughout execution of a session.
-func (t DoltTable) LockedToRoot(rootValue *doltdb.RootValue) *DoltTable {
-	t.lockedToRoot = rootValue
-	return &t
+func (t DoltTable) LockedToRoot(ctx *sql.Context, root *doltdb.RootValue) (*DoltTable, error) {
+	tbl, ok, err := root.GetTable(ctx, t.tableName)
+	if err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, doltdb.ErrTableNotFound
+	}
+
+	sch, err := tbl.GetSchema(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var autoCol schema.Column
+	_ = sch.GetAllCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
+		if col.AutoIncrement {
+			autoCol = col
+			stop = true
+		}
+		return
+	})
+
+	sqlSch, err := sqlutil.FromDoltSchema(t.tableName, sch)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DoltTable{
+		tableName:     t.tableName,
+		db:            t.db,
+		nbf:           tbl.Format(),
+		sch:           sch,
+		sqlSch:        sqlSch,
+		autoIncCol:    autoCol,
+		projectedCols: t.projectedCols,
+		opts:          t.opts,
+		lockedToRoot:  root,
+	}, nil
 }
 
 // Internal interface for declaring the interfaces that read-only dolt tables are expected to implement
@@ -152,14 +221,10 @@ func (t *DoltTable) WithIndexLookup(lookup sql.IndexLookup) sql.Table {
 }
 
 // doltTable returns the underlying doltTable from the current session
-func (t *DoltTable) doltTable(ctx *sql.Context) (*doltdb.Table, error) {
-	root := t.lockedToRoot
-	var err error
-	if root == nil {
-		root, err = t.getRoot(ctx)
-		if err != nil {
-			return nil, err
-		}
+func (t *DoltTable) DoltTable(ctx *sql.Context) (*doltdb.Table, error) {
+	root, err := t.workingRoot(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	table, ok, err := root.GetTable(ctx, t.tableName)
@@ -173,6 +238,27 @@ func (t *DoltTable) doltTable(ctx *sql.Context) (*doltdb.Table, error) {
 	return table, nil
 }
 
+// Return an opaque key that can be compared for equality to see if this
+// table's data still matches a previous view of the data that was retrieved
+// through DoltTable() or NumRows(), for example.
+//
+// Returns |false| for |ok| if this table's data is not cacheable.
+func (t *DoltTable) DataCacheKey(ctx *sql.Context) (doltdb.DataCacheKey, bool, error) {
+	r, err := t.workingRoot(ctx)
+	if err != nil {
+		return doltdb.DataCacheKey{}, false, err
+	}
+	return doltdb.NewDataCacheKey(r), true, nil
+}
+
+func (t *DoltTable) workingRoot(ctx *sql.Context) (*doltdb.RootValue, error) {
+	root := t.lockedToRoot
+	if root == nil {
+		return t.getRoot(ctx)
+	}
+	return root, nil
+}
+
 // getRoot returns the appropriate root value for this session. The only controlling factor
 // is whether this is a temporary table or not.
 func (t *DoltTable) getRoot(ctx *sql.Context) (*doltdb.RootValue, error) {
@@ -181,7 +267,7 @@ func (t *DoltTable) getRoot(ctx *sql.Context) (*doltdb.RootValue, error) {
 
 // GetIndexes implements sql.IndexedTable
 func (t *DoltTable) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
-	tbl, err := t.doltTable(ctx)
+	tbl, err := t.DoltTable(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -189,9 +275,19 @@ func (t *DoltTable) GetIndexes(ctx *sql.Context) ([]sql.Index, error) {
 	return index.DoltIndexesFromTable(ctx, t.db.Name(), t.tableName, tbl)
 }
 
+// HasIndex returns whether the given index is present in the table
+func (t *DoltTable) HasIndex(ctx *sql.Context, idx sql.Index) (bool, error) {
+	tbl, err := t.DoltTable(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	return index.TableHasIndex(ctx, t.db.Name(), t.tableName, tbl, idx)
+}
+
 // GetAutoIncrementValue gets the last AUTO_INCREMENT value
 func (t *DoltTable) GetAutoIncrementValue(ctx *sql.Context) (interface{}, error) {
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -209,8 +305,8 @@ func (t *DoltTable) String() string {
 }
 
 // NumRows returns the unfiltered count of rows contained in the table
-func (t *DoltTable) NumRows(ctx *sql.Context) (uint64, error) {
-	table, err := t.doltTable(ctx)
+func (t *DoltTable) numRows(ctx *sql.Context) (uint64, error) {
+	table, err := t.DoltTable(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -250,7 +346,7 @@ func (t *DoltTable) sqlSchema() sql.PrimaryKeySchema {
 
 // Partitions returns the partitions for this table.
 func (t *DoltTable) Partitions(ctx *sql.Context) (sql.PartitionIter, error) {
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +364,7 @@ func (t *DoltTable) IsTemporary() bool {
 	return false
 }
 
+// DataLength implements the sql.StatisticsTable interface.
 func (t *DoltTable) DataLength(ctx *sql.Context) (uint64, error) {
 	schema := t.Schema()
 	var numBytesPerRow uint64 = 0
@@ -296,12 +393,78 @@ func (t *DoltTable) DataLength(ctx *sql.Context) (uint64, error) {
 		}
 	}
 
-	numRows, err := t.NumRows(ctx)
+	numRows, err := t.numRows(ctx)
 	if err != nil {
 		return 0, err
 	}
 
 	return numBytesPerRow * numRows, nil
+}
+
+// AnalyzeTable implements the sql.StatisticsTable interface.
+// This method will save the stats into the Database state found in the Session.
+func (t *DoltTable) AnalyzeTable(ctx *sql.Context) error {
+	table, err := t.DoltTable(ctx)
+	if err != nil {
+		return err
+	}
+
+	m, err := table.GetRowData(ctx)
+	if err != nil {
+		return err
+	}
+
+	t.doltStats = &DoltTableStatistics{
+		rowCount:  m.Count(),
+		createdAt: time.Now(),
+	}
+
+	histMap, err := sql.NewHistogramMapFromTable(ctx, t)
+	if err != nil {
+		return err
+	}
+	t.doltStats.histogramMap = histMap
+
+	dSess := ctx.Session.(*dsess.DoltSession)
+	dbState, ok, err := dSess.LookupDbState(ctx, ctx.GetCurrentDatabase())
+	if !ok || err != nil {
+		return err
+	}
+	if dbState.TblStats == nil {
+		dbState.TblStats = make(map[string]sql.TableStatistics)
+	}
+	dbState.TblStats[t.tableName] = t.doltStats
+	return nil
+}
+
+// Statistics implements the sql.StatisticsTable interface.
+func (t *DoltTable) Statistics(ctx *sql.Context) (sql.TableStatistics, error) {
+	if t.doltStats != nil {
+		return t.doltStats, nil
+	}
+
+	// Load stats from the session
+	dSess, ok := ctx.Session.(*dsess.DoltSession)
+	if !ok {
+		return nil, nil
+	}
+	dbState, ok, err := dSess.LookupDbState(ctx, ctx.GetCurrentDatabase())
+	if !ok || err != nil {
+		return nil, nil
+	}
+	stats, ok := dbState.TblStats[t.tableName]
+	if !ok {
+		numRows, err := t.numRows(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &DoltTableStatistics{
+			rowCount: numRows,
+		}, nil
+	}
+	t.doltStats = stats.(*DoltTableStatistics)
+
+	return t.doltStats, nil
 }
 
 func (t *DoltTable) PrimaryKeySchema() sql.PrimaryKeySchema {
@@ -320,7 +483,7 @@ func (itr emptyRowIterator) Close(*sql.Context) error {
 
 // PartitionRows returns the table rows for the partition given
 func (t *DoltTable) PartitionRows(ctx *sql.Context, partition sql.Partition) (sql.RowIter, error) {
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +492,7 @@ func (t *DoltTable) PartitionRows(ctx *sql.Context, partition sql.Partition) (sq
 }
 
 func (t DoltTable) PartitionRows2(ctx *sql.Context, part sql.Partition) (sql.RowIter2, error) {
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -453,7 +616,7 @@ func (t *WritableDoltTable) Replacer(ctx *sql.Context) sql.RowReplacer {
 
 // Truncate implements sql.TruncateableTable
 func (t *WritableDoltTable) Truncate(ctx *sql.Context) (int, error) {
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable.DoltTable(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -494,7 +657,7 @@ func (t *WritableDoltTable) Truncate(ctx *sql.Context) (int, error) {
 // truncate returns an empty copy of the table given by setting the rows and indexes to empty. The schema can be
 // updated at the same time.
 func truncate(ctx *sql.Context, table *doltdb.Table, sch schema.Schema) (*doltdb.Table, error) {
-	empty, err := durable.NewEmptyIndex(ctx, table.ValueReadWriter(), sch)
+	empty, err := durable.NewEmptyIndex(ctx, table.ValueReadWriter(), table.NodeStore(), sch)
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +675,7 @@ func truncate(ctx *sql.Context, table *doltdb.Table, sch schema.Schema) (*doltdb
 	}
 
 	// truncate table resets auto-increment value
-	return doltdb.NewTable(ctx, table.ValueReadWriter(), sch, empty, idxSet, nil)
+	return doltdb.NewTable(ctx, table.ValueReadWriter(), table.NodeStore(), sch, empty, idxSet, nil)
 }
 
 // Updater implements sql.UpdatableTable
@@ -561,7 +724,7 @@ func (t *WritableDoltTable) getTableAutoIncrementValue(ctx *sql.Context) (interf
 }
 
 func (t *DoltTable) GetChecks(ctx *sql.Context) ([]sql.CheckDefinition, error) {
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1057,7 +1220,7 @@ func (t *AlterableDoltTable) RewriteInserter(
 		return nil, err
 	}
 
-	dt, err := t.doltTable(ctx)
+	dt, err := t.DoltTable.DoltTable(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1492,7 +1655,7 @@ func (t *AlterableDoltTable) CreateIndex(
 		columns[i] = indexCol.Name
 	}
 
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable.DoltTable(ctx)
 	if err != nil {
 		return err
 	}
@@ -1585,7 +1748,7 @@ func (t *AlterableDoltTable) RenameIndex(ctx *sql.Context, fromIndexName string,
 		return err
 	}
 
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable.DoltTable(ctx)
 	if err != nil {
 		return err
 	}
@@ -1992,7 +2155,7 @@ func (t *AlterableDoltTable) CreateIndexForForeignKey(ctx *sql.Context, indexNam
 		columns[i] = indexCol.Name
 	}
 
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable.DoltTable(ctx)
 	if err != nil {
 		return err
 	}
@@ -2118,7 +2281,7 @@ func (t *AlterableDoltTable) dropIndex(ctx *sql.Context, indexName string) (*dol
 		return nil, nil, err
 	}
 
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable.DoltTable(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2186,7 +2349,7 @@ func (t *AlterableDoltTable) CreateCheck(ctx *sql.Context, check *sql.CheckDefin
 		return err
 	}
 
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable.DoltTable(ctx)
 	if err != nil {
 		return err
 	}
@@ -2230,7 +2393,7 @@ func (t *AlterableDoltTable) DropCheck(ctx *sql.Context, chName string) error {
 		return err
 	}
 
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable.DoltTable(ctx)
 	if err != nil {
 		return err
 	}
@@ -2309,7 +2472,7 @@ func (t *AlterableDoltTable) CreatePrimaryKey(ctx *sql.Context, columns []sql.In
 		return nil
 	}
 
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable.DoltTable(ctx)
 	if err != nil {
 		return err
 	}
@@ -2373,7 +2536,7 @@ func (t *AlterableDoltTable) DropPrimaryKey(ctx *sql.Context) error {
 		return err
 	}
 
-	table, err := t.doltTable(ctx)
+	table, err := t.DoltTable.DoltTable(ctx)
 	if err != nil {
 		return err
 	}

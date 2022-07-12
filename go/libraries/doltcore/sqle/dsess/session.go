@@ -19,6 +19,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dolthub/go-mysql-server/sql"
 	goerrors "gopkg.in/src-d/go-errors.v1"
@@ -26,11 +27,13 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions"
+	"github.com/dolthub/dolt/go/libraries/doltcore/merge"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/globalstate"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/writer"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/libraries/utils/config"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 type batchMode int8
@@ -43,13 +46,23 @@ const (
 func init() {
 	_, ok := os.LookupEnv(TransactionMergeStompEnvKey)
 	if ok {
-		transactionMergeStomp = true
+		transactionMergeStompEnv = true
 	}
 }
 
-const TransactionMergeStompEnvKey = "DOLT_TRANSACTION_MERGE_STOMP"
+const (
+	ReplicateToRemoteKey     = "dolt_replicate_to_remote"
+	ReadReplicaRemoteKey     = "dolt_read_replica_remote"
+	SkipReplicationErrorsKey = "dolt_skip_replication_errors"
+	ReplicateHeadsKey        = "dolt_replicate_heads"
+	ReplicateAllHeadsKey     = "dolt_replicate_all_heads"
+	AsyncReplicationKey      = "dolt_async_replication"
+	// Transactions merges will stomp if either if the below keys are set
+	TransactionMergeStompKey    = "dolt_transaction_merge_stomp"
+	TransactionMergeStompEnvKey = "DOLT_TRANSACTION_MERGE_STOMP"
+)
 
-var transactionMergeStomp = false
+var transactionMergeStompEnv = false
 var ErrWorkingSetChanges = goerrors.NewKind("Cannot switch working set, session state is dirty. " +
 	"Rollback or commit changes before changing working sets.")
 
@@ -101,6 +114,11 @@ func NewSession(ctx *sql.Context, sqlSess *sql.BaseSession, pro RevisionDatabase
 	}
 
 	return sess, nil
+}
+
+// Provider returns the RevisionDatabaseProvider for this session.
+func (sess *Session) Provider() RevisionDatabaseProvider {
+	return sess.provider
 }
 
 // EnableBatchedMode enables batched mode for this session. This is only safe to do during initialization.
@@ -186,9 +204,11 @@ func (sess *Session) StartTransaction(ctx *sql.Context, dbName string, tCharacte
 		return DisabledTransaction{}, nil
 	}
 
-	err = sessionState.dbData.Ddb.Rebase(ctx)
-	if err != nil {
-		return nil, err
+	if _, v, ok := sql.SystemVariables.GetGlobal("dolt_read_replica_remote"); ok && v != "" {
+		err = sessionState.dbData.Ddb.Rebase(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	wsRef := sessionState.WorkingSet.Ref()
@@ -217,6 +237,7 @@ func (sess *Session) StartTransaction(ctx *sql.Context, dbName string, tCharacte
 		wsRef,
 		sessionState.dbData,
 		sessionState.WriteSession.GetOptions(),
+		getTransactionMergeStrategy(),
 		tCharacteristic,
 	), nil
 }
@@ -557,6 +578,60 @@ func (sess *Session) GetRoots(ctx *sql.Context, dbName string) (doltdb.Roots, bo
 	return dbState.GetRoots(), true
 }
 
+// ResolveRootForRef returns the root value for the ref given, which refers to either a commit spec or is one of the
+// special identifiers |WORKING| or |STAGED|
+// Returns the root value associated with the identifier given and its commit time
+func (sess *Session) ResolveRootForRef(ctx *sql.Context, dbName, hashStr string) (*doltdb.RootValue, *types.Timestamp, error) {
+	if hashStr == doltdb.Working || hashStr == doltdb.Staged {
+		// TODO: get from working set / staged update time
+		now := types.Timestamp(time.Now())
+		// TODO: no current database
+		roots, _ := sess.GetRoots(ctx, ctx.GetCurrentDatabase())
+		if hashStr == doltdb.Working {
+			return roots.Working, &now, nil
+		} else if hashStr == doltdb.Staged {
+			return roots.Staged, &now, nil
+		}
+	}
+
+	var root *doltdb.RootValue
+	var commitTime *types.Timestamp
+	cs, err := doltdb.NewCommitSpec(hashStr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	dbData, ok := sess.GetDbData(ctx, dbName)
+	if !ok {
+		return nil, nil, sql.ErrDatabaseNotFound.New(dbName)
+	}
+
+	headRef, err := sess.CWBHeadRef(ctx, dbName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cm, err := dbData.Ddb.Resolve(ctx, cs, headRef)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	root, err = cm.GetRootValue(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	meta, err := cm.GetCommitMeta(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	t := meta.Time()
+	commitTime = (*types.Timestamp)(&t)
+
+	return root, commitTime, nil
+}
+
 // SetRoot sets a new root value for the session for the database named. This is the primary mechanism by which data
 // changes are communicated to the engine and persisted back to disk. All data changes should be followed by a call to
 // update the session's root value via this method.
@@ -743,10 +818,27 @@ func (sess *Session) SwitchWorkingSet(
 		wsRef,
 		sessionState.dbData,
 		sessionState.WriteSession.GetOptions(),
+		getTransactionMergeStrategy(),
 		tCharacteristic,
 	))
 
 	return nil
+}
+
+func getTransactionMergeStrategy() merge.ConflictStompStrategy {
+	_, stompVar, ok := sql.SystemVariables.GetGlobal(TransactionMergeStompKey)
+	if ok {
+		s := stompVar.(int8)
+		if s == 1 {
+			return merge.ConflictStompStrategyPickTheirs
+		}
+	}
+
+	if transactionMergeStompEnv {
+		return merge.ConflictStompStrategyPickTheirs
+	}
+
+	return merge.ConflictStompStrategyNone
 }
 
 func (sess *Session) WorkingSet(ctx *sql.Context, dbName string) (*doltdb.WorkingSet, error) {

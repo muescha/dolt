@@ -15,13 +15,9 @@
 package shim
 
 import (
-	"fmt"
-
 	"github.com/dolthub/vitess/go/vt/proto/query"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
-	"github.com/dolthub/dolt/go/store/chunks"
-	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/prolly"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/types"
@@ -40,31 +36,23 @@ func ValueFromConflictMap(m prolly.ConflictMap) types.Value {
 	return tree.ValueFromNode(m.Node())
 }
 
-func MapFromValue(v types.Value, sch schema.Schema, vrw types.ValueReadWriter) prolly.Map {
+func ValueFromArtifactMap(m prolly.ArtifactMap) types.Value {
+	return tree.ValueFromNode(m.Node())
+}
+
+func MapFromValue(v types.Value, sch schema.Schema, ns tree.NodeStore) prolly.Map {
 	root := NodeFromValue(v)
 	kd := KeyDescriptorFromSchema(sch)
 	vd := ValueDescriptorFromSchema(sch)
-	ns := tree.NewNodeStore(ChunkStoreFromVRW(vrw))
 	return prolly.NewMap(root, ns, kd, vd)
 }
 
-func ConflictMapFromValue(v types.Value, ourSchema, theirSchema, baseSchema schema.Schema, vrw types.ValueReadWriter) prolly.ConflictMap {
+func ConflictMapFromValue(v types.Value, ourSchema, theirSchema, baseSchema schema.Schema, ns tree.NodeStore) prolly.ConflictMap {
 	root := NodeFromValue(v)
 	kd, ourVD := MapDescriptorsFromSchema(ourSchema)
 	theirVD := ValueDescriptorFromSchema(theirSchema)
 	baseVD := ValueDescriptorFromSchema(baseSchema)
-	ns := tree.NewNodeStore(ChunkStoreFromVRW(vrw))
 	return prolly.NewConflictMap(root, ns, kd, ourVD, theirVD, baseVD)
-}
-
-func ChunkStoreFromVRW(vrw types.ValueReadWriter) chunks.ChunkStore {
-	switch x := vrw.(type) {
-	case datas.Database:
-		return datas.ChunkStoreFromDatabase(x)
-	case *types.ValueStore:
-		return x.ChunkStore()
-	}
-	panic("unknown ValueReadWriter")
 }
 
 func MapDescriptorsFromSchema(sch schema.Schema) (kd, vd val.TupleDesc) {
@@ -115,72 +103,5 @@ func ValueDescriptorFromSchema(sch schema.Schema) val.TupleDesc {
 }
 
 func encodingFromSqlType(typ query.Type) val.Encoding {
-
-	// todo(andy): replace temp encodings
-	switch typ {
-	case query.Type_BLOB:
-		// todo: temporary hack for enginetests
-		return val.StringEnc
-	case query.Type_TEXT:
-		return val.StringEnc
-	case query.Type_JSON:
-		return val.JSONEnc
-	}
-
-	switch typ {
-	case query.Type_INT8:
-		return val.Int8Enc
-	case query.Type_UINT8:
-		return val.Uint8Enc
-	case query.Type_INT16:
-		return val.Int16Enc
-	case query.Type_UINT16:
-		return val.Uint16Enc
-	case query.Type_INT24:
-		return val.Int32Enc
-	case query.Type_UINT24:
-		return val.Uint32Enc
-	case query.Type_INT32:
-		return val.Int32Enc
-	case query.Type_UINT32:
-		return val.Uint32Enc
-	case query.Type_INT64:
-		return val.Int64Enc
-	case query.Type_UINT64:
-		return val.Uint64Enc
-	case query.Type_FLOAT32:
-		return val.Float32Enc
-	case query.Type_FLOAT64:
-		return val.Float64Enc
-	case query.Type_BIT:
-		return val.Uint64Enc
-	case query.Type_DECIMAL:
-		return val.DecimalEnc
-	case query.Type_YEAR:
-		return val.YearEnc
-	case query.Type_DATE:
-		return val.DateEnc
-	case query.Type_TIME:
-		return val.TimeEnc
-	case query.Type_TIMESTAMP:
-		return val.DatetimeEnc
-	case query.Type_DATETIME:
-		return val.DatetimeEnc
-	case query.Type_ENUM:
-		return val.EnumEnc
-	case query.Type_SET:
-		return val.SetEnc
-	case query.Type_BINARY:
-		return val.ByteStringEnc
-	case query.Type_VARBINARY:
-		return val.ByteStringEnc
-	case query.Type_CHAR:
-		return val.StringEnc
-	case query.Type_VARCHAR:
-		return val.StringEnc
-	case query.Type_GEOMETRY:
-		return val.GeometryEnc
-	default:
-		panic(fmt.Sprintf("unknown encoding %v", typ))
-	}
+	return val.Encoding(schema.EncodingFromSqlType(typ))
 }

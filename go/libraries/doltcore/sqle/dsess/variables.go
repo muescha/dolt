@@ -56,7 +56,7 @@ func init() {
 		},
 		{ // If true, disables the conflict and constraint violation check when you commit a transaction.
 			Name:              ForceTransactionCommit,
-			Scope:             sql.SystemVariableScope_Session,
+			Scope:             sql.SystemVariableScope_Both,
 			Dynamic:           true,
 			SetVarHintApplies: false,
 			Type:              sql.NewSystemBoolType(ForceTransactionCommit),
@@ -76,6 +76,16 @@ func init() {
 			Dynamic:           true,
 			SetVarHintApplies: false,
 			Type:              sql.NewSystemBoolType(AllowCommitConflicts),
+			Default:           int8(0),
+		},
+		// If true, any conflicts produced by a transaction merge are
+		// automatically resolved with the latest transaction's values.
+		{
+			Name:              TransactionMergeStompKey,
+			Scope:             sql.SystemVariableScope_Global,
+			Dynamic:           true,
+			SetVarHintApplies: false,
+			Type:              sql.NewSystemBoolType(TransactionMergeStompKey),
 			Default:           int8(0),
 		},
 	})

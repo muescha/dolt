@@ -4,17 +4,6 @@ load $BATS_TEST_DIRNAME/helper/common.bash
 setup() {
     skiponwindows "tests are flaky on Windows"
     setup_common
-    skip_nbf_dolt_1
-
-    # Needed for dolt_branches test
-    cd $BATS_TMPDIR
-    mkdir remotes-$$
-    mkdir remotes-$$/empty
-    echo remotesrv log available here $BATS_TMPDIR/remotes-$$/remotesrv.log
-    remotesrv --http-port 1234 --dir ./remotes-$$ &> ./remotes-$$/remotesrv.log 3>&- &
-    remotesrv_pid=$!
-    cd dolt-repo-$$
-    mkdir "dolt-repo-clones"
 }
 
 teardown() {
@@ -27,17 +16,16 @@ teardown() {
 
 @test "system-tables: Show list of system tables using dolt ls --system or --all" {
     dolt sql -q "create table test (pk int, c1 int, primary key(pk))"
-    dolt sql -q "show tables" --save "BATS query"
-    dolt ls --system
+
     run dolt ls --system
     [ $status -eq 0 ]
     [[ "$output" =~ "dolt_log" ]] || false
     [[ "$output" =~ "dolt_conflicts" ]] || false
     [[ "$output" =~ "dolt_branches" ]] || false
     [[ "$output" =~ "dolt_remotes" ]] || false
-    [[ "$output" =~ "dolt_query_catalog" ]] || false
     [[ "$output" =~ "dolt_status" ]] || false
     [[ ! "$output" =~ " test" ]] || false  # spaces are impt!
+
     run dolt ls --all
     [ $status -eq 0 ]
     [[ "$output" =~ "dolt_log" ]] || false
@@ -46,16 +34,18 @@ teardown() {
     [[ "$output" =~ "dolt_conflicts" ]] || false
     [[ "$output" =~ "dolt_branches" ]] || false
     [[ "$output" =~ "dolt_remotes" ]] || false
-    [[ "$output" =~ "dolt_query_catalog" ]] || false
     [[ "$output" =~ "dolt_status" ]] || false
     [[ "$output" =~ "test" ]] || false
+
     dolt add test
     dolt commit -m "Added test table"
+
     run dolt ls --system
     [ $status -eq 0 ]
     [[ "$output" =~ "dolt_history_test" ]] || false
     [[ "$output" =~ "dolt_diff_test" ]] || false
     [[ "$output" =~ "dolt_commit_diff_test" ]] || false
+
     run dolt ls --all
     [ $status -eq 0 ]
     [[ "$output" =~ "dolt_history_test" ]] || false
@@ -147,6 +137,8 @@ teardown() {
 }
 
 @test "system-tables: query dolt_remotes system table" {
+    skip_nbf_dolt_1 "dolt remote not supported"
+
     run dolt sql -q "select count(*) from dolt_remotes" -r csv
     [ $status -eq 0 ]
     [[ "$output" =~ 0 ]] || false
@@ -159,13 +151,19 @@ teardown() {
     [[ "$output" =~ 1 ]] || false
 
     regex='file://.*/remote'
-    run dolt sql -q "select * from dolt_remotes" -r csv
+    run dolt sql -q "select name, fetch_specs, params from dolt_remotes" -r csv
     [ $status -eq 0 ]
-    [[ "${lines[0]}" = name,url,fetch_specs,params ]] || false
-    [[ "${lines[1]}" =~ origin,$regex,[refs/heads/*:refs/remotes/origin/*,map[] ]] || false
+    [[ "${lines[0]}" = name,fetch_specs,params ]] || false
+    [[ "${lines[1]}" =~ "origin,\"[\"\"refs/heads/*:refs/remotes/origin/*\"\"]\",{}" ]] || false
+    run dolt sql -q "select url from dolt_remotes" -r csv
+    [ $status -eq 0 ]
+    [[ "${lines[0]}" = url ]] || false
+    [[ "${lines[1]}" =~ $regex ]] || false
 }
 
 @test "system-tables: check unsupported dolt_remote behavior" {
+    skip_nbf_dolt_1 "dolt remote not supported"
+
     run dolt sql -q "insert into dolt_remotes (name, url) values ('origin1', 'file://remote')"
     [ $status -ne 0 ]
     [[ "$output" =~ "cannot insert remote in an SQL session" ]] || false
@@ -227,6 +225,17 @@ teardown() {
     run dolt sql -q "select count(*) from dolt_remotes" -r csv
     [ $status -eq 0 ]
     [[ "$output" =~ 0 ]] || false
+}
+
+@test "system-tables: query dolt_diff system table" {
+    dolt sql -q "CREATE TABLE testStaged (pk INT, c1 INT, PRIMARY KEY(pk))"
+    dolt add testStaged
+    dolt sql -q "CREATE TABLE testWorking (pk INT, c1 INT, PRIMARY KEY(pk))"
+
+    run dolt sql -r csv -q 'select * from dolt_diff'
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "STAGED,testStaged,,,,,false,true" ]] || false
+    [[ "$output" =~ "WORKING,testWorking,,,,,false,true" ]] || false
 }
 
 @test "system-tables: query dolt_diff_ system table" {
@@ -331,8 +340,6 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" =~ "$EXPECTED" ]] || false
 }
-
-
 
 @test "system-tables: query dolt_history_ system table" {
     dolt sql -q "create table test (pk int, c1 int, primary key(pk))"
@@ -468,6 +475,15 @@ teardown() {
 @test "system-tables: dolt_branches table should include remote refs as well" {
     skip "This functionality needs to be implemented"
 
+    cd $BATS_TMPDIR
+    mkdir remotes-$$
+    mkdir remotes-$$/empty
+    echo remotesrv log available here $BATS_TMPDIR/remotes-$$/remotesrv.log
+    remotesrv --http-port 1234 --dir ./remotes-$$ &> ./remotes-$$/remotesrv.log 3>&- &
+    remotesrv_pid=$!
+    cd dolt-repo-$$
+    mkdir "dolt-repo-clones"
+
     # Create a remote with a test branch
     dolt remote add test-remote http://localhost:50051/test-org/test-repo
     run dolt push test-remote main
@@ -528,4 +544,23 @@ SQL
     [ "$status" -eq 0 ]
     [[ "$output" =~ "1,1" ]] || false
     [[ "$output" =~ "2,2" ]] || false
+}
+
+@test "system-tables: query dolt_tags" {
+    dolt sql -q "CREATE TABLE test(pk int primary key, val int)"
+    dolt sql -q "INSERT INTO test VALUES (1,1)"
+    dolt commit -am "cm1"
+    dolt tag v1 head -m "tag v1 from main"
+
+    dolt checkout -b branch1
+    dolt sql -q "INSERT INTO test VALUES (2,2)"
+    dolt commit -am "cm2"
+    dolt tag v2 branch1~ -m "tag v2 from branch1"
+    dolt tag v3 branch1 -m "tag v3 from branch1"
+
+    run dolt sql -q "SELECT * FROM dolt_tags" -r csv
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "tag v1 from main" ]] || false
+    [[ "$output" =~ "tag v2 from branch1" ]] || false
+    [[ "$output" =~ "tag v3 from branch1" ]] || false
 }

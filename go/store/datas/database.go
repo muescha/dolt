@@ -30,6 +30,7 @@ import (
 	"github.com/dolthub/dolt/go/store/nbs"
 
 	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/types"
 )
 
@@ -61,6 +62,7 @@ type Database interface {
 	// datasetID in the above Datasets Map.
 	GetDataset(ctx context.Context, datasetID string) (Dataset, error)
 
+	GetDatasetsByRootHash(ctx context.Context, rootHash hash.Hash) (DatasetsMap, error)
 	// Commit updates the Commit that ds.ID() in this database points at. All
 	// Values that have been written to this Database are guaranteed to be
 	// persistent after Commit() returns successfully.
@@ -142,11 +144,13 @@ type Database interface {
 }
 
 func NewDatabase(cs chunks.ChunkStore) Database {
-	return newDatabase(types.NewValueStore(cs))
+	vs := types.NewValueStore(cs)
+	ns := tree.NewNodeStore(cs)
+	return newDatabase(vs, ns)
 }
 
-func NewTypesDatabase(vs *types.ValueStore) Database {
-	return newDatabase(vs)
+func NewTypesDatabase(vs *types.ValueStore, ns tree.NodeStore) Database {
+	return newDatabase(vs, ns)
 }
 
 // GarbageCollector provides a method to remove unreferenced data from a store.

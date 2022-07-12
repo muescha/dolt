@@ -15,17 +15,21 @@
 package creation
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/dolthub/go-mysql-server/sql"
+
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/durable"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
-	"github.com/dolthub/dolt/go/store/pool"
 	"github.com/dolthub/dolt/go/store/prolly"
+	"github.com/dolthub/dolt/go/store/prolly/shim"
+	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 )
@@ -138,7 +142,7 @@ func BuildSecondaryIndex(ctx context.Context, tbl *doltdb.Table, idx schema.Inde
 		if err != nil {
 			return nil, err
 		}
-		return durable.IndexFromNomsMap(m, tbl.ValueReadWriter()), nil
+		return durable.IndexFromNomsMap(m, tbl.ValueReadWriter(), tbl.NodeStore()), nil
 
 	case types.Format_DOLT_1:
 		sch, err := tbl.GetSchema(ctx)
@@ -150,7 +154,7 @@ func BuildSecondaryIndex(ctx context.Context, tbl *doltdb.Table, idx schema.Inde
 			return nil, err
 		}
 		primary := durable.ProllyMapFromIndex(m)
-		return BuildSecondaryProllyIndex(ctx, tbl.ValueReadWriter(), sch, idx, primary)
+		return BuildSecondaryProllyIndex(ctx, tbl.ValueReadWriter(), tbl.NodeStore(), sch, idx, primary)
 
 	default:
 		return nil, fmt.Errorf("unknown NomsBinFormat")
@@ -159,25 +163,34 @@ func BuildSecondaryIndex(ctx context.Context, tbl *doltdb.Table, idx schema.Inde
 
 // BuildSecondaryProllyIndex builds secondary index data for the given primary
 // index row data |primary|. |sch| is the current schema of the table.
-func BuildSecondaryProllyIndex(ctx context.Context, vrw types.ValueReadWriter, sch schema.Schema, idx schema.Index, primary prolly.Map) (durable.Index, error) {
-	empty, err := durable.NewEmptyIndex(ctx, vrw, idx.Schema())
+func BuildSecondaryProllyIndex(ctx context.Context, vrw types.ValueReadWriter, ns tree.NodeStore, sch schema.Schema, idx schema.Index, primary prolly.Map) (durable.Index, error) {
+	if idx.IsUnique() {
+		kd := shim.KeyDescriptorFromSchema(idx.Schema())
+		return BuildUniqueProllyIndex(ctx, vrw, ns, sch, idx, primary, func(ctx context.Context, existingKey, newKey val.Tuple) error {
+			return sql.ErrDuplicateEntry.Wrap(&prollyUniqueKeyErr{k: newKey, kd: kd, IndexName: idx.Name()}, idx.Name())
+		})
+	}
+
+	empty, err := durable.NewEmptyIndex(ctx, vrw, ns, idx.Schema())
 	if err != nil {
 		return nil, err
 	}
 	secondary := durable.ProllyMapFromIndex(empty)
-
-	iter, err := primary.IterAll(ctx)
-	if err != nil {
-		return nil, err
+	if schema.IsKeyless(sch) {
+		secondary = prolly.ConvertToSecondaryKeylessIndex(secondary)
 	}
-	pkLen := sch.GetPKCols().Size()
 
 	// create a key builder for index key tuples
 	kd, _ := secondary.Descriptors()
 	keyBld := val.NewTupleBuilder(kd)
-	keyMap := GetIndexKeyMapping(sch, idx)
+	pkLen, keyMap := GetIndexKeyMapping(sch, idx)
 
 	mut := secondary.Mutate()
+	iter, err := primary.IterAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	for {
 		k, v, err := iter.Next(ctx)
 		if err == io.EOF {
@@ -198,7 +211,7 @@ func BuildSecondaryProllyIndex(ctx context.Context, vrw types.ValueReadWriter, s
 		}
 
 		// todo(andy): build permissive?
-		idxKey := keyBld.Build(sharePool)
+		idxKey := keyBld.Build(primary.Pool())
 		idxVal := val.EmptyTuple
 
 		// todo(andy): periodic flushing
@@ -215,19 +228,201 @@ func BuildSecondaryProllyIndex(ctx context.Context, vrw types.ValueReadWriter, s
 	return durable.IndexFromProllyMap(secondary), nil
 }
 
-func GetIndexKeyMapping(sch schema.Schema, idx schema.Index) (m val.OrdinalMapping) {
+// DupEntryCb receives duplicate unique index entries.
+type DupEntryCb func(ctx context.Context, existingKey, newKey val.Tuple) error
+
+// BuildUniqueProllyIndex builds a unique index based on the given |primary| row
+// data. If any duplicate entries are found, they are passed to |cb|. If |cb|
+// returns a non-nil error then the process is stopped.
+func BuildUniqueProllyIndex(ctx context.Context, vrw types.ValueReadWriter, ns tree.NodeStore, sch schema.Schema, idx schema.Index, primary prolly.Map, cb DupEntryCb) (durable.Index, error) {
+	empty, err := durable.NewEmptyIndex(ctx, vrw, ns, idx.Schema())
+	if err != nil {
+		return nil, err
+	}
+	secondary := durable.ProllyMapFromIndex(empty)
+	if schema.IsKeyless(sch) {
+		secondary = prolly.ConvertToSecondaryKeylessIndex(secondary)
+	}
+
+	iter, err := primary.IterAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// create a key builder for index key tuples
+	kd, _ := secondary.Descriptors()
+	keyBld := val.NewTupleBuilder(kd)
+	pkLen, keyMap := GetIndexKeyMapping(sch, idx)
+
+	// key builder for the indexed columns only which is a prefix of the index key
+	prefixKD := kd.PrefixDesc(idx.Count())
+	prefixKB := val.NewTupleBuilder(prefixKD)
+
+	p := primary.Pool()
+
+	mut := secondary.Mutate()
+	for {
+		k, v, err := iter.Next(ctx)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		foundNullPrefix := false
+		prefixKB.Recycle()
+		for to := range keyMap {
+			from := keyMap.MapOrdinal(to)
+			var f []byte
+			if from < pkLen {
+				f = k.GetField(from)
+			} else {
+				from -= pkLen
+				f = v.GetField(from)
+			}
+			keyBld.PutRaw(to, f)
+			if to < prefixKD.Count() {
+				if f == nil {
+					foundNullPrefix = true
+				} else {
+					prefixKB.PutRaw(to, f)
+				}
+			}
+		}
+
+		idxKey := keyBld.Build(p)
+		idxVal := val.EmptyTuple
+
+		if !foundNullPrefix {
+			prefixKey := prefixKB.Build(p)
+
+			itr, err := NewPrefixItr(ctx, prefixKey, prefixKD, mut)
+			if err != nil {
+				return nil, err
+			}
+
+			k, _, err = itr.Next(ctx)
+			if err != nil && err != io.EOF {
+				return nil, err
+			}
+			if err == nil {
+				// We found a duplicate entry so delegate behavior to callback.
+				if err = cb(ctx, k, idxKey); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if err = mut.Put(ctx, idxKey, idxVal); err != nil {
+			return nil, err
+		}
+	}
+
+	secondary, err = mut.Map(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return durable.IndexFromProllyMap(secondary), nil
+}
+
+// PrefixItr iterates all keys of a given prefix |p| and its descriptor |d| in
+// map |m|.
+type PrefixItr struct {
+	itr prolly.MapIter
+	p   val.Tuple
+	d   val.TupleDesc
+}
+
+func NewPrefixItr(ctx context.Context, p val.Tuple, d val.TupleDesc, m rangeIterator) (PrefixItr, error) {
+	rng := prolly.PrefixRange(p, d)
+	itr, err := m.IterRange(ctx, rng)
+	if err != nil {
+		return PrefixItr{}, err
+	}
+	return PrefixItr{p: p, d: d, itr: itr}, nil
+}
+
+func (itr PrefixItr) Next(ctx context.Context) (k, v val.Tuple, err error) {
+OUTER:
+	for {
+		k, v, err = itr.itr.Next(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// check if p is a prefix of k
+		// range iteration currently can return keys not in the range
+		for i := 0; i < itr.p.Count(); i++ {
+			f1 := itr.p.GetField(i)
+			f2 := k.GetField(i)
+			if bytes.Compare(f1, f2) != 0 {
+				// if a field in the prefix does not match |k|, go to the next row
+				continue OUTER
+			}
+		}
+
+		return k, v, nil
+	}
+}
+
+type rangeIterator interface {
+	IterRange(ctx context.Context, rng prolly.Range) (prolly.MapIter, error)
+}
+
+// GetIndexKeyMapping returns a mapping from primary row data to index data. It can handle keyless schema.
+func GetIndexKeyMapping(sch schema.Schema, idx schema.Index) (keyLen int, m val.OrdinalMapping) {
 	m = make(val.OrdinalMapping, len(idx.AllTags()))
+
+	if schema.IsKeyless(sch) {
+		// the only key is the hash of the values
+		keyLen = 1
+	} else {
+		keyLen = sch.GetPKCols().Size()
+	}
 
 	for i, tag := range idx.AllTags() {
 		j, ok := sch.GetPKCols().TagToIdx[tag]
 		if !ok {
 			j = sch.GetNonPKCols().TagToIdx[tag]
-			j += sch.GetPKCols().Size()
+			j += keyLen
 		}
 		m[i] = j
 	}
 
-	return
+	if schema.IsKeyless(sch) {
+		// last key in index is hash which is the only column in the key
+		m = append(m, 0)
+		return keyLen, m
+	}
+
+	return keyLen, m
 }
 
-var sharePool = pool.NewBuffPool()
+var _ error = (*prollyUniqueKeyErr)(nil)
+
+// prollyUniqueKeyErr is an error that is returned when a unique constraint has been violated. It contains the index key
+// (which is the full row).
+type prollyUniqueKeyErr struct {
+	k         val.Tuple
+	kd        val.TupleDesc
+	IndexName string
+}
+
+// Error implements the error interface.
+func (u *prollyUniqueKeyErr) Error() string {
+	keyStr, _ := formatKey(u.k, u.kd)
+	return fmt.Sprintf("duplicate unique key given: %s", keyStr)
+}
+
+// formatKey returns a comma-separated string representation of the key given
+// that matches the output of the old format.
+func formatKey(key val.Tuple, td val.TupleDesc) (string, error) {
+	vals := make([]string, td.Count())
+	for i := 0; i < td.Count(); i++ {
+		vals[i] = td.FormatValue(i, key.GetField(i))
+	}
+
+	return fmt.Sprintf("[%s]", strings.Join(vals, ",")), nil
+}

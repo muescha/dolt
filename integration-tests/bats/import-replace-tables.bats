@@ -103,7 +103,7 @@ SQL
 @test "import-replace-tables: replace table using json" {
     dolt sql <<SQL
 CREATE TABLE employees (
-  \`id\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`id\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first name\` LONGTEXT COMMENT 'tag:1',
   \`last name\` LONGTEXT COMMENT 'tag:2',
   \`title\` LONGTEXT COMMENT 'tag:3',
@@ -121,7 +121,7 @@ SQL
 @test "import-replace-tables: replace table using json with wrong schema" {
     dolt sql <<SQL
 CREATE TABLE employees (
-  \`idz\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`idz\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first namez\` LONGTEXT COMMENT 'tag:1',
   \`last namez\` LONGTEXT COMMENT 'tag:2',
   \`titlez\` LONGTEXT COMMENT 'tag:3',
@@ -140,7 +140,7 @@ SQL
 @test "import-replace-tables: replace table using schema with json" {
     dolt sql <<SQL
 CREATE TABLE employees (
-  \`idz\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`idz\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first namez\` LONGTEXT COMMENT 'tag:1',
   \`last namez\` LONGTEXT COMMENT 'tag:2',
   \`titlez\` LONGTEXT COMMENT 'tag:3',
@@ -182,7 +182,7 @@ SQL
 @test "import-replace-tables: replace table with bad json" {
     dolt sql <<SQL
 CREATE TABLE employees (
-  \`id\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`id\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first name\` LONGTEXT COMMENT 'tag:1',
   \`last name\` LONGTEXT COMMENT 'tag:2',
   \`title\` LONGTEXT COMMENT 'tag:3',
@@ -199,7 +199,7 @@ SQL
 @test "import-replace-tables: replace table using xlsx file" {
     dolt sql <<SQL
 CREATE TABLE employees (
-  \`id\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`id\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first\` LONGTEXT COMMENT 'tag:1',
   \`last\` LONGTEXT COMMENT 'tag:2',
   \`title\` LONGTEXT COMMENT 'tag:3',
@@ -217,7 +217,7 @@ SQL
 @test "import-replace-tables: replace table using xlsx file with wrong schema" {
     dolt sql <<SQL
 CREATE TABLE employees (
-  \`id\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`id\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first name\` LONGTEXT COMMENT 'tag:1',
   \`last name\` LONGTEXT COMMENT 'tag:2',
   \`title\` LONGTEXT COMMENT 'tag:3',
@@ -253,7 +253,7 @@ SQL
 @test "import-replace-tables: replace table with a json with columns in different order" {
     dolt sql <<SQL
 CREATE TABLE employees (
-  \`id\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`id\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first name\` LONGTEXT COMMENT 'tag:1',
   \`last name\` LONGTEXT COMMENT 'tag:2',
   \`title\` LONGTEXT COMMENT 'tag:3',
@@ -271,7 +271,7 @@ SQL
 @test "import-replace-tables: replace table with a csv with columns in different order" {
     dolt sql <<SQL
 CREATE TABLE employees (
-  \`id\` LONGTEXT NOT NULL COMMENT 'tag:0',
+  \`id\` varchar(20) NOT NULL COMMENT 'tag:0',
   \`first name\` LONGTEXT COMMENT 'tag:1',
   \`last name\` LONGTEXT COMMENT 'tag:2',
   \`title\` LONGTEXT COMMENT 'tag:3',
@@ -308,7 +308,6 @@ SQL
     dolt add .
     dolt commit --allow-empty -m "update table from parquet file"
 
-    skip_nbf_dolt_1
     run dolt diff --summary main new_branch
     [ "$status" -eq 0 ]
     [[ "$output" = "" ]] || false
@@ -336,6 +335,7 @@ DELIM
 
     run dolt table import -r test 1pk5col-ints-updt.csv
     [ "$status" -eq 0 ]
+    [[ "$output" =~ "Warning: There are fewer columns in the import file's schema than the table's schema" ]] || false
     [[ "$output" =~ "Rows Processed: 1, Additions: 1, Modifications: 0, Had No Effect: 0" ]] || false
     [[ "$output" =~ "Import completed successfully." ]] || false
 
@@ -362,6 +362,7 @@ DELIM
     dolt sql -q "insert into subset values (1000, 100, 1000, 10000)"
 
     run dolt table import -r subset data.csv
+    ! [[ "$output" =~ "Warning: There are fewer columns in the import file's schema than the table's schema" ]] || false
     [ "$status" -eq 0 ]
 
     # schema argument subsets the data and adds empty column

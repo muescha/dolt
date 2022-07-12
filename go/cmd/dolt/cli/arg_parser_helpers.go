@@ -16,6 +16,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -77,7 +78,7 @@ func ParseAuthor(authorStr string) (string, string, error) {
 const (
 	AllowEmptyFlag   = "allow-empty"
 	DateParam        = "date"
-	CommitMessageArg = "message"
+	MessageArg       = "message"
 	AuthorParam      = "author"
 	ForceFlag        = "force"
 	DryRunFlag       = "dry-run"
@@ -93,10 +94,13 @@ const (
 	MoveFlag         = "move"
 	DeleteFlag       = "delete"
 	DeleteForceFlag  = "D"
+	OutputOnlyFlag   = "output-only"
+	TrackFlag        = "track"
 )
 
 const (
 	SyncBackupId        = "sync"
+	SyncBackupUrlId     = "sync-url"
 	RestoreBackupId     = "restore"
 	AddBackupId         = "add"
 	RemoveBackupId      = "remove"
@@ -111,11 +115,11 @@ If there were uncommitted working set changes present when the merge started, {{
 // Creates the argparser shared dolt commit cli and DOLT_COMMIT.
 func CreateCommitArgParser() *argparser.ArgParser {
 	ap := argparser.NewArgParser()
-	ap.SupportsString(CommitMessageArg, "m", "msg", "Use the given {{.LessThan}}msg{{.GreaterThan}} as the commit message.")
+	ap.SupportsString(MessageArg, "m", "msg", "Use the given {{.LessThan}}msg{{.GreaterThan}} as the commit message.")
 	ap.SupportsFlag(AllowEmptyFlag, "", "Allow recording a commit that has the exact same data as its sole parent. This is usually a mistake, so it is disabled by default. This option bypasses that safety.")
 	ap.SupportsString(DateParam, "", "date", "Specify the date used in the commit. If not specified the current system time is used.")
 	ap.SupportsFlag(ForceFlag, "f", "Ignores any foreign key warnings and proceeds with the commit.")
-	ap.SupportsString(AuthorParam, "", "author", "Specify an explicit author using the standard A U Thor <author@example.com> format.")
+	ap.SupportsString(AuthorParam, "", "author", "Specify an explicit author using the standard A U Thor {{.LessThan}}author@example.com{{.GreaterThan}} format.")
 	ap.SupportsFlag(AllFlag, "a", "Adds all edited files in working to staged.")
 	return ap
 }
@@ -124,7 +128,7 @@ func CreateMergeArgParser() *argparser.ArgParser {
 	ap := argparser.NewArgParser()
 	ap.SupportsFlag(NoFFParam, "", "Create a merge commit even when the merge resolves as a fast-forward.")
 	ap.SupportsFlag(SquashParam, "", "Merges changes to the working set without updating the commit history")
-	ap.SupportsString(CommitMessageArg, "m", "msg", "Use the given {{.LessThan}}msg{{.GreaterThan}} as the commit message.")
+	ap.SupportsString(MessageArg, "m", "msg", "Use the given {{.LessThan}}msg{{.GreaterThan}} as the commit message.")
 	ap.SupportsFlag(AbortParam, "", mergeAbortDetails)
 	return ap
 }
@@ -160,6 +164,12 @@ func CreateCheckoutArgParser() *argparser.ArgParser {
 	ap := argparser.NewArgParser()
 	ap.SupportsString(CheckoutCoBranch, "", "branch", "Create a new branch named {{.LessThan}}new_branch{{.GreaterThan}} and start it at {{.LessThan}}start_point{{.GreaterThan}}.")
 	ap.SupportsFlag(ForceFlag, "f", "If there is any changes in working set, the force flag will wipe out the current changes and checkout the new branch.")
+	ap.SupportsString(TrackFlag, "t", "", "When creating a new branch, set up 'upstream' configuration.")
+	return ap
+}
+
+func CreateCherryPickArgParser() *argparser.ArgParser {
+	ap := argparser.NewArgParser()
 	return ap
 }
 
@@ -171,7 +181,7 @@ func CreateFetchArgParser() *argparser.ArgParser {
 
 func CreateRevertArgParser() *argparser.ArgParser {
 	ap := argparser.NewArgParser()
-	ap.SupportsString(AuthorParam, "", "author", "Specify an explicit author using the standard A U Thor <author@example.com> format.")
+	ap.SupportsString(AuthorParam, "", "author", "Specify an explicit author using the standard A U Thor {{.LessThan}}author@example.com{{.GreaterThan}} format.")
 	ap.ArgListHelp = append(ap.ArgListHelp, [2]string{"revision",
 		"The commit revisions. If multiple revisions are given, they're applied in the order given."})
 
@@ -198,6 +208,15 @@ func CreateBranchArgParser() *argparser.ArgParser {
 	return ap
 }
 
+func CreateTagArgParser() *argparser.ArgParser {
+	ap := argparser.NewArgParser()
+	ap.ArgListHelp = append(ap.ArgListHelp, [2]string{"ref", "A commit ref that the tag should point at."})
+	ap.SupportsString(MessageArg, "m", "msg", "Use the given {{.LessThan}}msg{{.GreaterThan}} as the tag message.")
+	ap.SupportsFlag(VerboseFlag, "v", "list tags along with their metadata.")
+	ap.SupportsFlag(DeleteFlag, "d", "Delete a tag.")
+	return ap
+}
+
 func CreateBackupArgParser() *argparser.ArgParser {
 	ap := argparser.NewArgParser()
 	ap.ArgListHelp = append(ap.ArgListHelp, [2]string{"region", "cloud provider region associated with this backup."})
@@ -209,4 +228,61 @@ func CreateBackupArgParser() *argparser.ArgParser {
 	ap.SupportsString(dbfactory.AWSCredsFileParam, "", "file", "AWS credentials file")
 	ap.SupportsString(dbfactory.AWSCredsProfile, "", "profile", "AWS profile to use")
 	return ap
+}
+
+func CreateVerifyConstraintsArgParser() *argparser.ArgParser {
+	ap := argparser.NewArgParser()
+	ap.SupportsFlag(AllFlag, "a", "Verifies that all rows in the database do not violate constraints instead of just rows modified or inserted in the working set.")
+	ap.SupportsFlag(OutputOnlyFlag, "o", "Disables writing violated constraints to the constraint violations table.")
+	ap.ArgListHelp = append(ap.ArgListHelp, [2]string{"table", "The table(s) to check constraints on. If omitted, checks all tables."})
+	return ap
+}
+
+var awsParams = []string{dbfactory.AWSRegionParam, dbfactory.AWSCredsTypeParam, dbfactory.AWSCredsFileParam, dbfactory.AWSCredsProfile}
+
+func ProcessBackupArgs(apr *argparser.ArgParseResults, scheme, backupUrl string) (map[string]string, error) {
+	params := map[string]string{}
+
+	var err error
+	if scheme == dbfactory.AWSScheme {
+		err = AddAWSParams(backupUrl, apr, params)
+	} else {
+		err = VerifyNoAwsParams(apr)
+	}
+
+	return params, err
+}
+
+func AddAWSParams(remoteUrl string, apr *argparser.ArgParseResults, params map[string]string) error {
+	isAWS := strings.HasPrefix(remoteUrl, "aws")
+
+	if !isAWS {
+		for _, p := range awsParams {
+			if _, ok := apr.GetValue(p); ok {
+				return fmt.Errorf("%s param is only valid for aws cloud remotes in the format aws://dynamo-table:s3-bucket/database", p)
+			}
+		}
+	}
+
+	for _, p := range awsParams {
+		if val, ok := apr.GetValue(p); ok {
+			params[p] = val
+		}
+	}
+
+	return nil
+}
+
+func VerifyNoAwsParams(apr *argparser.ArgParseResults) error {
+	if awsParams := apr.GetValues(awsParams...); len(awsParams) > 0 {
+		awsParamKeys := make([]string, 0, len(awsParams))
+		for k := range awsParams {
+			awsParamKeys = append(awsParamKeys, k)
+		}
+
+		keysStr := strings.Join(awsParamKeys, ",")
+		return fmt.Errorf("The parameters %s, are only valid for aws remotes", keysStr)
+	}
+
+	return nil
 }

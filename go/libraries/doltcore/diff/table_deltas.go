@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/durable"
 	"github.com/dolthub/dolt/go/libraries/utils/set"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -233,7 +234,13 @@ func (td TableDelta) IsRename() bool {
 	return td.FromName != td.ToName
 }
 
+// HasHashChanged returns true if the hash of the table content has changed between
+// the fromRoot and toRoot.
 func (td TableDelta) HasHashChanged() (bool, error) {
+	if td.IsAdd() || td.IsDrop() {
+		return true, nil
+	}
+
 	toHash, err := td.ToTable.HashOf()
 	if err != nil {
 		return false, err
@@ -245,6 +252,26 @@ func (td TableDelta) HasHashChanged() (bool, error) {
 	}
 
 	return !toHash.Equal(fromHash), nil
+}
+
+// HasSchemaChanged returns true if the table schema has changed between the
+// fromRoot and toRoot.
+func (td TableDelta) HasSchemaChanged(ctx context.Context) (bool, error) {
+	if td.IsAdd() || td.IsDrop() {
+		return true, nil
+	}
+
+	fromSchemaHash, err := td.FromTable.GetSchemaHash(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	toSchemaHash, err := td.ToTable.GetSchemaHash(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	return fromSchemaHash != toSchemaHash, nil
 }
 
 func (td TableDelta) HasPrimaryKeySetChanged() bool {
@@ -283,6 +310,14 @@ func (td TableDelta) GetSchemas(ctx context.Context) (from, to schema.Schema, er
 	return td.FromSch, td.ToSch, nil
 }
 
+// Format returns the format of the tables in this delta.
+func (td TableDelta) Format() *types.NomsBinFormat {
+	if td.FromTable != nil {
+		return td.FromTable.Format()
+	}
+	return td.ToTable.Format()
+}
+
 func (td TableDelta) IsKeyless(ctx context.Context) (bool, error) {
 	f, t, err := td.GetSchemas(ctx)
 	if err != nil {
@@ -300,7 +335,8 @@ func (td TableDelta) IsKeyless(ctx context.Context) (bool, error) {
 	}
 }
 
-// GetMaps returns the table's row map at the fromRoot and toRoot, or and empty map if the table did not exist.
+// GetMaps returns the table's row map at the fromRoot and toRoot, or an empty map if the table did not exist.
+// Deprecated: only compatible with LD1 storage format. Use GetRowData instead
 func (td TableDelta) GetMaps(ctx context.Context) (from, to types.Map, err error) {
 	if td.FromTable != nil {
 		from, err = td.FromTable.GetNomsRowData(ctx)
@@ -318,6 +354,29 @@ func (td TableDelta) GetMaps(ctx context.Context) (from, to types.Map, err error
 		}
 	} else {
 		to, _ = types.NewMap(ctx, td.FromTable.ValueReadWriter())
+	}
+
+	return from, to, nil
+}
+
+// GetRowData returns the table's row data at the fromRoot and toRoot, or an empty map if the table did not exist.
+func (td TableDelta) GetRowData(ctx context.Context) (from, to durable.Index, err error) {
+	if td.FromTable != nil {
+		from, err = td.FromTable.GetRowData(ctx)
+		if err != nil {
+			return from, to, err
+		}
+	} else {
+		from, _ = durable.NewEmptyIndex(ctx, td.ToTable.ValueReadWriter(), td.ToTable.NodeStore(), td.ToSch)
+	}
+
+	if td.ToTable != nil {
+		to, err = td.ToTable.GetRowData(ctx)
+		if err != nil {
+			return from, to, err
+		}
+	} else {
+		to, _ = durable.NewEmptyIndex(ctx, td.FromTable.ValueReadWriter(), td.FromTable.NodeStore(), td.FromSch)
 	}
 
 	return from, to, nil

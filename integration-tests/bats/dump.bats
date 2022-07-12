@@ -37,6 +37,18 @@ teardown() {
     [ "$status" -eq 0 ]
     [ "${#lines[@]}" -eq 3 ]
 
+    run grep FOREIGN_KEY_CHECKS=0 doltdump.sql
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 1 ]
+
+    run grep UNIQUE_CHECKS=0 doltdump.sql
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 1 ]
+
+    # Sanity check
+    run grep AUTOCOMMIT doltdump.sql
+    [ "$status" -eq 1 ]
+
     run dolt dump
     [ "$status" -ne 0 ]
     [[ "$output" =~ "doltdump.sql already exists" ]] || false
@@ -56,11 +68,8 @@ teardown() {
     dolt sql -q "INSERT INTO new_table VALUES (1);"
     dolt sql -q "CREATE TABLE warehouse(warehouse_id int primary key, warehouse_name longtext);"
     dolt sql -q "INSERT into warehouse VALUES (1, 'UPS'), (2, 'TV'), (3, 'Table');"
-    if [ "$DOLT_FORMAT_FEATURE_FLAG" != "true" ] ; then
-      # V1 storage format does not support keyless tables yet
-      dolt sql -q "CREATE TABLE keyless (c0 int, c1 int);"
-      dolt sql -q "INSERT INTO keyless VALUES (0,0),(2,2),(1,1),(1,1);"
-    fi
+    dolt sql -q "CREATE TABLE keyless (c0 int, c1 int);"
+    dolt sql -q "INSERT INTO keyless VALUES (0,0),(2,2),(1,1),(1,1);"
     dolt add .
     dolt commit -m "create tables"
 
@@ -73,7 +82,6 @@ teardown() {
     dolt add .
     dolt commit --allow-empty -m "create tables from doltdump"
 
-    skip_nbf_dolt_1
     run dolt diff --summary main new_branch
     [ "$status" -eq 0 ]
     [[ "$output" = "" ]] || false
@@ -87,11 +95,8 @@ teardown() {
     dolt sql -q "CREATE TABLE warehouse(warehouse_id int primary key, warehouse_name longtext);"
     dolt sql -q "INSERT into warehouse VALUES (1, 'UPS'), (2, 'TV'), (3, 'Table');"
 
-    if ["$DOLT_FORMAT_FEATURE_FLAG" != true]
-    then
-      dolt sql -q "CREATE TABLE keyless (c0 int, c1 int);"
-      dolt sql -q "INSERT INTO keyless VALUES (0,0),(2,2),(1,1),(1,1);"
-    fi
+    dolt sql -q "CREATE TABLE keyless (c0 int, c1 int);"
+    dolt sql -q "INSERT INTO keyless VALUES (0,0),(2,2),(1,1),(1,1);"
 
     dolt add .
     dolt commit -m "create tables"
@@ -108,7 +113,6 @@ teardown() {
     dolt add .
     dolt commit --allow-empty -m "create tables from doltdump"
 
-    skip_nbf_dolt_1
     run dolt diff --summary main new_branch
     [ "$status" -eq 0 ]
     [[ "$output" = "" ]] || false
@@ -234,7 +238,6 @@ teardown() {
 }
 
 @test "dump: SQL type - with keyless tables" {
-    skip_nbf_dolt_1
 
     dolt sql -q "CREATE TABLE new_table(pk int primary key);"
     dolt sql -q "INSERT INTO new_table VALUES (1);"
@@ -393,7 +396,6 @@ teardown() {
     dolt add .
     dolt commit --allow-empty -m "create tables from doltdump"
 
-    skip_nbf_dolt_1
     run dolt diff --summary main new_branch
     [ "$status" -eq 0 ]
     [[ "$output" = "" ]] || false
@@ -420,7 +422,6 @@ teardown() {
     dolt add .
     dolt commit --allow-empty -m "create tables from doltdump"
 
-    skip_nbf_dolt_1
     run dolt diff --summary main new_branch
     [ "$status" -eq 0 ]
     [[ "$output" = "" ]] || false
@@ -531,7 +532,6 @@ teardown() {
 
     dolt checkout new_branch
 
-    skip_nbf_dolt_1
     import_tables "json"
     dolt add .
     dolt commit --allow-empty -m "create tables from doltdump"
@@ -558,7 +558,6 @@ teardown() {
 
     import_tables "json"
 
-    skip_nbf_dolt_1
     dolt add .
     dolt commit --allow-empty -m "create tables from doltdump"
 
@@ -644,6 +643,76 @@ teardown() {
     run dolt diff --summary main new_branch
     [ "$status" -eq 0 ]
     [[ "$output" = "" ]] || false
+}
+
+@test "dump: -na flag works correctly" {
+    dolt sql -q "CREATE TABLE new_table(pk int primary key);"
+    dolt sql -q "INSERT INTO new_Table values (1)"
+
+    run dolt dump -na
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Successfully exported data." ]] || false
+    [ -f doltdump.sql ]
+
+    run head -n 3 doltdump.sql
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 3 ]
+    [[ "$output" =~ "SET FOREIGN_KEY_CHECKS=0;" ]] || false
+    [[ "$output" =~ "SET UNIQUE_CHECKS=0;" ]] || false
+
+    run grep AUTOCOMMIT doltdump.sql
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 1 ]
+
+    run tail -n 2 doltdump.sql
+    [[ "$output" =~ "COMMIT;" ]] || false
+
+    dolt sql < doltdump.sql
+
+    run dolt sql -r csv -q "select * from new_table"
+    [ "$status" -eq 0 ]
+    [[ "${lines[0]}" = "pk" ]] || false
+    [[ "${lines[1]}" = "1" ]] || false
+
+    # try with a csv output and ensure that there are no problems
+    run dolt dump -r csv -na
+    [ "$status" -eq 0 ]
+    [ -f doltdump/new_table.csv ]
+}
+
+@test "dump: --no-autocommit flag works with multiple tables" {
+    dolt sql -q "CREATE TABLE table1(pk int primary key);"
+    dolt sql -q "CREATE TABLE table2(pk int primary key);"
+
+    dolt sql -q "INSERT INTO table1 VALUES (1)"
+    dolt sql -q "INSERT INTO table2 VALUES (1)"
+
+    run dolt dump --no-autocommit
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Successfully exported data." ]] || false
+    [ -f doltdump.sql ]
+
+    run grep AUTOCOMMIT doltdump.sql
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 2 ]
+
+    run grep "COMMIT;" doltdump.sql
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 2 ]
+
+    # test with batch mode
+    run dolt dump --batch -f --no-autocommit
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Successfully exported data." ]] || false
+    [ -f doltdump.sql ]
+
+    run grep AUTOCOMMIT doltdump.sql
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 2 ]
+
+    run grep "COMMIT;" doltdump.sql
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 2 ]
 }
 
 function create_tables() {

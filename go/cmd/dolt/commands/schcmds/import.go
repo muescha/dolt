@@ -17,7 +17,6 @@ package schcmds
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -136,10 +135,9 @@ func (cmd ImportCmd) EventType() eventsapi.ClientEventType {
 	return eventsapi.ClientEventType_SCHEMA
 }
 
-// CreateMarkdown creates a markdown file containing the helptext for the command at the given path
-func (cmd ImportCmd) CreateMarkdown(wr io.Writer, commandStr string) error {
+func (cmd ImportCmd) Docs() *cli.CommandDocumentation {
 	ap := cmd.ArgParser()
-	return commands.CreateMarkdown(wr, cli.GetCommandDocumentation(commandStr, schImportDocs, ap))
+	return cli.NewCommandDocumentation(schImportDocs, ap)
 }
 
 func (cmd ImportCmd) ArgParser() *argparser.ArgParser {
@@ -163,12 +161,16 @@ func (cmd ImportCmd) ArgParser() *argparser.ArgParser {
 // Exec executes the command
 func (cmd ImportCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cmd.ArgParser()
-	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, schImportDocs, ap))
+	help, usage := cli.HelpAndUsagePrinters(cli.CommandDocsForCommandString(commandStr, schImportDocs, ap))
 	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	if apr.NArg() != 2 {
 		usage()
 		return 1
+	}
+
+	if dEnv.IsLocked() {
+		return commands.HandleVErrAndExitCode(errhand.VerboseErrorFromError(env.ErrActiveServerLock.New(dEnv.LockFile())), usage)
 	}
 
 	return commands.HandleVErrAndExitCode(importSchema(ctx, dEnv, apr), usage)
@@ -298,9 +300,9 @@ func importSchema(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPars
 			return errhand.BuildDError("error: failed to get table.").AddCause(err).Build()
 		}
 
-		empty, err := types.NewMap(ctx, root.VRW())
+		empty, err := durable.NewEmptyIndex(ctx, root.VRW(), root.NodeStore(), sch)
 		if err != nil {
-			return errhand.BuildDError("error: failed to create table.").AddCause(err).Build()
+			return errhand.BuildDError("error: failed to get table.").AddCause(err).Build()
 		}
 
 		var indexSet durable.IndexSet
@@ -309,11 +311,16 @@ func importSchema(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPars
 			if err != nil {
 				return errhand.BuildDError("error: failed to create table.").AddCause(err).Build()
 			}
+		} else {
+			indexSet, err = durable.NewIndexSetWithEmptyIndexes(ctx, root.VRW(), root.NodeStore(), sch)
+			if err != nil {
+				return errhand.BuildDError("error: failed to get table.").AddCause(err).Build()
+			}
 		}
 
-		tbl, err = doltdb.NewNomsTable(ctx, root.VRW(), sch, empty, indexSet, nil)
+		tbl, err = doltdb.NewTable(ctx, root.VRW(), root.NodeStore(), sch, empty, indexSet, nil)
 		if err != nil {
-			return errhand.BuildDError("error: failed to create table.").AddCause(err).Build()
+			return errhand.BuildDError("error: failed to get table.").AddCause(err).Build()
 		}
 
 		root, err = root.PutTable(ctx, tblName, tbl)
