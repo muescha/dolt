@@ -60,8 +60,8 @@ func NewFileStore(path, ver string) (*FileStore, error) {
 	idx := make(map[hash.Hash]indexEntry, defaultIndexSz)
 
 	stats := &fileStoreStats{
-		SyncLatency:  metrics.NewTimeHistogram(),
-		BytesPerSync: metrics.NewByteHistogram(),
+		CommitLatency:  metrics.NewTimeHistogram(),
+		BytesPerCommit: metrics.NewByteHistogram(),
 	}
 
 	store = &FileStore{
@@ -181,27 +181,26 @@ func (st *FileStore) Commit(ctx context.Context, current, last hash.Hash) (bool,
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
+	// todo(andy): this size is inaccurate if the buffer
+	//  is flushed between commits dues to chunk reads
+	//  or buffer reaching capacity.
+	st.stats.recordCommitSize(uint64(st.wr.Buffered()))
+	t1 := time.Now()
+	defer st.stats.recordCommitLatency(t1)
+
 	if st.root != last {
 		return false, fmt.Errorf("hashes not equal %v != %v", st.root, last)
 	}
-
 	if err := st.writeRootUpdate(current); err != nil {
 		return false, err
 	}
 
-	// todo(andy): this size is inaccurate if the buffer
-	//  is flushed between commits dues to chunk reads
-	//  or buffer reaching capacity.
-	st.stats.recordSyncSize(uint64(st.wr.Buffered()))
-	t1 := time.Now()
-	defer st.stats.recordSyncLatency(t1)
-
 	if err := st.wr.Flush(); err != nil {
 		return false, err
 	}
-	if err := st.sync(); err != nil {
-		return false, err
-	}
+	//if err := st.sync(); err != nil {
+	//	return false, err
+	//}
 
 	st.root = current
 
@@ -213,8 +212,8 @@ func (st *FileStore) Stats() interface{} {
 }
 
 func (st *FileStore) StatsSummary() string {
-	l := st.stats.SyncLatency.String()
-	s := st.stats.BytesPerSync.String()
+	l := st.stats.CommitLatency.String()
+	s := st.stats.BytesPerCommit.String()
 	return fmt.Sprintf("Latency: %s \nSize %s", l, s)
 }
 
@@ -392,14 +391,14 @@ func validateChunkRead(e indexEntry, r chunkRecord) error {
 }
 
 type fileStoreStats struct {
-	SyncLatency  metrics.Histogram
-	BytesPerSync metrics.Histogram
+	CommitLatency  metrics.Histogram
+	BytesPerCommit metrics.Histogram
 }
 
-func (s *fileStoreStats) recordSyncLatency(t1 time.Time) {
-	s.SyncLatency.SampleTimeSince(t1)
+func (s *fileStoreStats) recordCommitLatency(t1 time.Time) {
+	s.CommitLatency.SampleTimeSince(t1)
 }
 
-func (s *fileStoreStats) recordSyncSize(sz uint64) {
-	s.BytesPerSync.Sample(sz)
+func (s *fileStoreStats) recordCommitSize(sz uint64) {
+	s.BytesPerCommit.Sample(sz)
 }
