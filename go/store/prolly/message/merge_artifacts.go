@@ -119,6 +119,8 @@ func walkMergeArtifactAddresses(ctx context.Context, msg serial.Message, cb func
 		}
 	}
 
+	// internal nodes may have addresses in both keys and values
+
 	cnt := ma.KeyAddressOffsetsLength()
 	arr2 := ma.KeyItemsBytes()
 	for i := 0; i < cnt; i++ {
@@ -128,7 +130,6 @@ func walkMergeArtifactAddresses(ctx context.Context, msg serial.Message, cb func
 			return err
 		}
 	}
-	assertFalse((arr != nil) && (arr2 != nil))
 	return nil
 }
 

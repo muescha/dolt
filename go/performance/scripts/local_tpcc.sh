@@ -35,8 +35,15 @@ do
     shift
 done
 
+rm -rf ./sysbench-tpcc
+
 if [ ! -d "./sysbench-tpcc" ]; then
-  git clone https://github.com/Percona-Lab/sysbench-tpcc.git
+  echo "cloning sysbench-tpcc benchmark repo"
+#  git clone https://github.com/Percona-Lab/sysbench-tpcc.git
+  git clone https://github.com/dolthub/sysbench-tpcc.git
+  pushd sysbench-tpcc
+  git checkout andy/easier-join
+  popd
 fi
 
 # collect custom sysbench scripts
