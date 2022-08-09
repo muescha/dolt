@@ -296,9 +296,11 @@ func (w *prollyTableWriter) Reset(ctx context.Context, sess *prollyWriteSession,
 }
 
 func (w *prollyTableWriter) table(ctx context.Context) (t *doltdb.Table, err error) {
+	fmt.Printf("DHRUV:flushing primary storage\n")
 	// flush primary row storage
 	pm, err := w.primary.Map(ctx)
 	if err != nil {
+		fmt.Printf("DHRUV:failed to flush primary storage: %v\n", err)
 		return nil, err
 	}
 
@@ -314,8 +316,10 @@ func (w *prollyTableWriter) table(ctx context.Context) (t *doltdb.Table, err err
 	}
 
 	for _, wrSecondary := range w.secondary {
+		fmt.Printf("DHRUV:flushing secondary idx %s\n", wrSecondary.Name())
 		sm, err := wrSecondary.Map(ctx)
 		if err != nil {
+			fmt.Printf("DHRUV:failed to flush secondary idx %s\n: %v", wrSecondary.Name(), err)
 			return nil, err
 		}
 		idx := durable.IndexFromProllyMap(sm)

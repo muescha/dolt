@@ -16,6 +16,7 @@ package tree
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/dolthub/dolt/go/store/chunks"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -86,7 +87,9 @@ func (ns nodeStore) Write(ctx context.Context, nd Node) (hash.Hash, error) {
 	c := chunks.NewChunk(nd.bytes())
 	assertTrue(c.Size() > 0)
 
+	fmt.Printf("DHRUV: NodeStore writing chunk of size %d\n", c.Size())
 	if err := ns.store.Put(ctx, c); err != nil {
+		fmt.Printf("DHRUV: NodeStore failed to write chunk of size %d: %v\n", c.Size(), err)
 		return hash.Hash{}, err
 	}
 	ns.cache.insert(c)
