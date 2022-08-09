@@ -16,10 +16,9 @@ package writer
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -42,11 +41,10 @@ var _ WriteSession = &prollyWriteSession{}
 
 // GetTableWriter implemented WriteSession.
 func (s *prollyWriteSession) GetTableWriter(ctx context.Context, table, db string, setter SessionRootSetter, batched bool) (TableWriter, error) {
-	logger := ctxzap.Extract(ctx)
 	s.mut.Lock()
 	defer s.mut.Unlock()
 
-	logger.Info("Getting Prolly Table Writer", zap.Bool("batched", batched))
+	fmt.Printf("DHRUV:Getting Prolly Table Writer\n")
 
 	if tw, ok := s.tables[table]; ok {
 		return tw, nil
@@ -92,7 +90,7 @@ func (s *prollyWriteSession) GetTableWriter(ctx context.Context, table, db strin
 		}
 	}
 
-	logger.Info("Got Prolly Table Writer")
+	fmt.Printf("DHRUV:Got Prolly Table Writer\n")
 
 	twr := &prollyTableWriter{
 		tableName: table,
@@ -115,14 +113,13 @@ func (s *prollyWriteSession) GetTableWriter(ctx context.Context, table, db strin
 
 // Flush implemented WriteSession.
 func (s *prollyWriteSession) Flush(ctx context.Context) (*doltdb.WorkingSet, error) {
-	logger := ctxzap.Extract(ctx)
 	s.mut.Lock()
-	logger.Info("flushing write session")
+	fmt.Printf("DHRUV:flushing write session\n")
 	defer s.mut.Unlock()
 
 	ws, err := s.flush(ctx)
 	if err != nil {
-		logger.Error("failed to flush write session", zap.Error(err))
+		fmt.Printf("DHRUV:failed to flush write session: %v\n", err)
 		return nil, err
 	}
 

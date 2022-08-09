@@ -129,8 +129,7 @@ func getSecondaryKeylessProllyWriters(ctx context.Context, t *doltdb.Table, sqlS
 
 // Insert implements TableWriter.
 func (w *prollyTableWriter) Insert(ctx *sql.Context, sqlRow sql.Row) (err error) {
-	logger := ctxzap.Extract(ctx)
-	logger.Info(fmt.Sprintf("prolly inserting sqlRow: %v", sqlRow))
+	fmt.Printf("DHRUV:prolly inserting sqlRow: %v\n", sqlRow)
 	if err := w.primary.Insert(ctx, sqlRow); err != nil {
 		return err
 	}
@@ -142,7 +141,7 @@ func (w *prollyTableWriter) Insert(ctx *sql.Context, sqlRow sql.Row) (err error)
 			return err
 		}
 	}
-	logger.Info(fmt.Sprintf("prolly inserted sqlRow: %v", sqlRow))
+	fmt.Printf("DHRUV:prolly inserted sqlRow: %v\n", sqlRow)
 	return nil
 }
 
@@ -203,11 +202,10 @@ func (w *prollyTableWriter) Close(ctx *sql.Context) error {
 	if w.batched {
 		return nil
 	}
-	logger := ctxzap.Extract(ctx)
-	logger.Info("Closing prolly table writer")
+	fmt.Printf("DHRUV:Closing prolly table writer\n")
 	err := w.flush(ctx)
 	if err != nil {
-		logger.Error("failed to flush prolly table writer during close", zap.Error(err))
+		fmt.Printf("DHRUV:failed to flush prolly table writer during close: %v\n", err)
 	}
 	return err
 }
