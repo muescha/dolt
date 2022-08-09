@@ -18,6 +18,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -40,8 +42,11 @@ var _ WriteSession = &prollyWriteSession{}
 
 // GetTableWriter implemented WriteSession.
 func (s *prollyWriteSession) GetTableWriter(ctx context.Context, table, db string, setter SessionRootSetter, batched bool) (TableWriter, error) {
+	logger := ctxzap.Extract(ctx)
 	s.mut.Lock()
 	defer s.mut.Unlock()
+
+	logger.Info("Getting Prolly Table Writer", zap.Bool("batched", batched))
 
 	if tw, ok := s.tables[table]; ok {
 		return tw, nil
@@ -87,6 +92,8 @@ func (s *prollyWriteSession) GetTableWriter(ctx context.Context, table, db strin
 		}
 	}
 
+	logger.Info("Got Prolly Table Writer")
+
 	twr := &prollyTableWriter{
 		tableName: table,
 		dbName:    db,
@@ -108,9 +115,18 @@ func (s *prollyWriteSession) GetTableWriter(ctx context.Context, table, db strin
 
 // Flush implemented WriteSession.
 func (s *prollyWriteSession) Flush(ctx context.Context) (*doltdb.WorkingSet, error) {
+	logger := ctxzap.Extract(ctx)
 	s.mut.Lock()
+	logger.Info("flushing write session")
 	defer s.mut.Unlock()
-	return s.flush(ctx)
+
+	ws, err := s.flush(ctx)
+	if err != nil {
+		logger.Error("failed to flush write session", zap.Error(err))
+		return nil, err
+	}
+
+	return ws, nil
 }
 
 // SetWorkingSet implements WriteSession.

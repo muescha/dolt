@@ -16,8 +16,11 @@ package writer
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/durable"
@@ -126,6 +129,8 @@ func getSecondaryKeylessProllyWriters(ctx context.Context, t *doltdb.Table, sqlS
 
 // Insert implements TableWriter.
 func (w *prollyTableWriter) Insert(ctx *sql.Context, sqlRow sql.Row) (err error) {
+	logger := ctxzap.Extract(ctx)
+	logger.Info(fmt.Sprintf("prolly inserting sqlRow: %v", sqlRow))
 	if err := w.primary.Insert(ctx, sqlRow); err != nil {
 		return err
 	}
@@ -137,6 +142,7 @@ func (w *prollyTableWriter) Insert(ctx *sql.Context, sqlRow sql.Row) (err error)
 			return err
 		}
 	}
+	logger.Info(fmt.Sprintf("prolly inserted sqlRow: %v", sqlRow))
 	return nil
 }
 
@@ -197,7 +203,13 @@ func (w *prollyTableWriter) Close(ctx *sql.Context) error {
 	if w.batched {
 		return nil
 	}
-	return w.flush(ctx)
+	logger := ctxzap.Extract(ctx)
+	logger.Info("Closing prolly table writer")
+	err := w.flush(ctx)
+	if err != nil {
+		logger.Error("failed to flush prolly table writer during close", zap.Error(err))
+	}
+	return err
 }
 
 // StatementBegin implements TableWriter.
@@ -219,12 +231,17 @@ func (w *prollyTableWriter) DiscardChanges(ctx *sql.Context, errorEncountered er
 
 // StatementComplete implements TableWriter.
 func (w *prollyTableWriter) StatementComplete(ctx *sql.Context) error {
+	logger := ctxzap.Extract(ctx)
+	logger.Info("completing statement")
 	err := w.primary.Commit(ctx)
 	for _, secondary := range w.secondary {
 		sErr := secondary.Commit(ctx)
 		if sErr != nil && err == nil {
 			err = sErr
 		}
+	}
+	if err != nil {
+		logger.Error("failed to complete statement", zap.Error(err))
 	}
 	return err
 }
