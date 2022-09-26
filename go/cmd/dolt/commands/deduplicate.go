@@ -17,10 +17,17 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/durable"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/utils/argparser"
+	"github.com/dolthub/dolt/go/store/prolly"
+	"github.com/dolthub/dolt/go/store/val"
 )
 
 type DedupeCmd struct{}
@@ -59,15 +66,129 @@ func (cmd DedupeCmd) Exec(ctx context.Context, commandStr string, args []string,
 		return HandleVErrAndExitCode(verr, usage)
 	}
 
-	table := apr.Arg(0)
-	cli.Println("deduplicating clustered index for table: ", table)
+	ws, err := dEnv.WorkingSet(ctx)
+	if err != nil {
+		verr = errhand.VerboseErrorFromError(err)
+		return HandleVErrAndExitCode(verr, usage)
+	}
+	root := ws.WorkingRoot()
 
-	if err := deduplicateClusteredIndex(ctx, dEnv, table); err != nil {
+	table := apr.Arg(0)
+	t, ok, err := root.GetTable(ctx, table)
+	if err == nil && !ok {
+		err = fmt.Errorf("table %s does not exist in working root", table)
+	}
+	if err != nil {
+		verr = errhand.VerboseErrorFromError(err)
+		return HandleVErrAndExitCode(verr, usage)
+	}
+
+	cli.Println("deduplicating primary keys for table: ", table)
+
+	t, err = deduplicateTableData(ctx, t)
+	if err != nil {
+		verr = errhand.VerboseErrorFromError(err)
+		return HandleVErrAndExitCode(verr, usage)
+	}
+
+	root, err = root.PutTable(ctx, table, t)
+	if err != nil {
+		verr = errhand.VerboseErrorFromError(err)
+		return HandleVErrAndExitCode(verr, usage)
+	}
+
+	err = dEnv.UpdateWorkingSet(ctx, ws.WithWorkingRoot(root))
+	if err != nil {
 		verr = errhand.VerboseErrorFromError(err)
 	}
 	return HandleVErrAndExitCode(verr, usage)
 }
 
-func deduplicateClusteredIndex(ctx context.Context, dEnv *env.DoltEnv, table string) error {
-	return nil
+func deduplicateTableData(ctx context.Context, t *doltdb.Table) (*doltdb.Table, error) {
+	rows, err := t.GetRowData(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	m := durable.ProllyMapFromIndex(rows)
+	m, err = deduplicateIndexData(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+
+	t, err = t.UpdateRows(ctx, durable.IndexFromProllyMap(m))
+	if err != nil {
+		return nil, err
+	}
+
+	sch, err := t.GetSchema(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, def := range sch.Indexes().AllIndexes() {
+		idx, err := t.GetIndexRowData(ctx, def.Name())
+		if err != nil {
+			return nil, err
+		}
+
+		m := durable.ProllyMapFromIndex(idx)
+		m, err = deduplicateIndexData(ctx, m)
+		if err != nil {
+			return nil, err
+		}
+
+		t, err = t.SetIndexRows(ctx, def.Name(), durable.IndexFromProllyMap(m))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return t, nil
+}
+
+type tupleSlice struct {
+	edits []val.Tuple
+}
+
+var _ prolly.TupleIter = &tupleSlice{}
+
+func (ts *tupleSlice) Next(ctx context.Context) (k, v val.Tuple) {
+	if len(ts.edits) > 0 {
+		k, v = ts.edits[0], nil
+		ts.edits = ts.edits[1:]
+	}
+	return
+}
+
+func deduplicateIndexData(ctx context.Context, m prolly.Map) (prolly.Map, error) {
+	iter, err := m.IterAll(ctx)
+	if err != nil {
+		return prolly.Map{}, err
+	}
+	desc, _ := m.Descriptors()
+
+	var key, prev val.Tuple
+	dupes := make([]val.Tuple, 0, 65536)
+
+	for {
+		key, _, err = iter.Next(ctx)
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return prolly.Map{}, err
+		}
+		if prev == nil {
+			prev = key
+			continue
+		}
+
+		if desc.Compare(prev, key) == 0 {
+			dupes = append(dupes, prev)
+		}
+		prev = key
+
+		// todo: batching
+	}
+
+	return prolly.MutateMapWithTupleIter(ctx, m, &tupleSlice{edits: dupes})
 }
