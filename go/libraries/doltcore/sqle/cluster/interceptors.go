@@ -121,7 +121,6 @@ func (ci *clientinterceptor) handleResponseHeaders(header metadata.MD, role Role
 			}
 		}
 	}
-	ci.lgr.Warnf("cluster: clientinterceptor: response was missing role and epoch metadata")
 }
 
 func (ci *clientinterceptor) Options() []grpc.DialOption {
