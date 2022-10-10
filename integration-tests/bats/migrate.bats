@@ -19,6 +19,30 @@ function checksum_table {
     dolt sql -q "SELECT CAST(SUM(CRC32(CONCAT($COLUMNS))) AS UNSIGNED) FROM $1 AS OF '$2';" -r csv | tail -n1
 }
 
+@test "migrate: chrono types" {
+    dolt sql <<SQL
+CREATE TABLE chrono (
+    pk int primary key,
+    c0 date,
+    c1 time,
+    c2 datetime,
+    c3 timestamp,
+    c4 year
+);
+CALL dcommit('-Am', 'added chrono table');
+INSERT INTO chrono VALUES (1, '1000-01-01', '-838:59:59.000000', '1000-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000', 1901);
+CALL dcommit('-am', 'new chrono row');
+INSERT INTO chrono VALUES (2, '9999-12-31', '838:59:59.000000', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999', 2155);
+CALL dcommit('-am', 'new chrono row');
+INSERT INTO chrono VALUES (3, '1000-01-01', '-838:59:59.000000', NULL, '1970-01-01 00:00:01.000000', 1901);
+CALL dcommit('-am', 'new chrono row');
+SQL
+
+    [[ ! $(cat ./.dolt/noms/manifest | cut -f 2 -d :) = "$TARGET_NBF" ]] || false
+    dolt migrate
+    [[ $(cat ./.dolt/noms/manifest | cut -f 2 -d :) = "$TARGET_NBF" ]] || false
+}
+
 @test "migrate: smoke test" {
     dolt sql <<SQL
 CREATE TABLE test (pk int primary key, c0 int, c1 int);
