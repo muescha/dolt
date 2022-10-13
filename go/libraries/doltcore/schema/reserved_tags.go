@@ -24,6 +24,9 @@ import "math"
 // ** WARNING - DO NOT CHANGE **
 
 const (
+	// ReservedTagMin is the start of a range of tags which the user should not be able to use in their schemas.
+	ReservedTagMin uint64 = 1 << 50
+
 	// SystemTableReservedMin defines the lower bound of the tag space reserved for system tables
 	SystemTableReservedMin uint64 = ReservedTagMin << 1
 )

@@ -869,12 +869,7 @@ func (db Database) createSqlTable(ctx *sql.Context, tableName string, sch sql.Pr
 		return sql.ErrTableAlreadyExists.New(tableName)
 	}
 
-	headRoot, err := db.GetHeadRoot(ctx)
-	if err != nil {
-		return err
-	}
-
-	doltSch, err := sqlutil.ToDoltSchema(ctx, root, tableName, sch, headRoot, collation)
+	doltSch, err := sqlutil.ToDoltSchema(sch, collation)
 	if err != nil {
 		return err
 	}
@@ -901,23 +896,6 @@ func (db Database) createDoltTable(ctx *sql.Context, tableName string, root *dol
 		return err
 	} else if exists {
 		return sql.ErrTableAlreadyExists.New(tableName)
-	}
-
-	var conflictingTbls []string
-	_ = doltSch.GetAllCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
-		_, tbl, exists, err := root.GetTableByColTag(ctx, tag)
-		if err != nil {
-			return true, err
-		}
-		if exists && tbl != tableName {
-			errStr := schema.ErrTagPrevUsed(tag, col.Name, tbl).Error()
-			conflictingTbls = append(conflictingTbls, errStr)
-		}
-		return false, nil
-	})
-
-	if len(conflictingTbls) > 0 {
-		return fmt.Errorf(strings.Join(conflictingTbls, "\n"))
 	}
 
 	newRoot, err := root.CreateEmptyTable(ctx, tableName, doltSch)

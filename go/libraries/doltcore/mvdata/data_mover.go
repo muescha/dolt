@@ -142,11 +142,6 @@ func InferSchema(ctx context.Context, root *doltdb.RootValue, rd table.ReadClose
 		}
 	}
 
-	newCols, err = root.GenerateTagsForNewColColl(ctx, tableName, newCols)
-	if err != nil {
-		return nil, errhand.BuildDError("failed to generate new schema").AddCause(err).Build()
-	}
-
 	err = schema.ValidateForInsert(newCols)
 	if err != nil {
 		return nil, errhand.BuildDError("invalid schema").AddCause(err).Build()

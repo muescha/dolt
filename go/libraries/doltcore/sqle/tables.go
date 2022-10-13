@@ -1186,21 +1186,10 @@ func (t *AlterableDoltTable) AddColumn(ctx *sql.Context, column *sql.Column, ord
 		return err
 	}
 
-	ti, err := typeinfo.FromSqlType(column.Type)
+	col, err := sqlutil.ToDoltCol(column)
 	if err != nil {
 		return err
-	}
-	tags, err := root.GenerateTagsForNewColumns(ctx, t.tableName, []string{column.Name}, []types.NomsKind{ti.NomsKind()}, nil)
-	if err != nil {
-		return err
-	}
-
-	col, err := sqlutil.ToDoltCol(tags[0], column)
-	if err != nil {
-		return err
-	}
-
-	if col.IsPartOfPK {
+	} else if col.IsPartOfPK {
 		return errors.New("adding primary keys is not supported")
 	}
 
@@ -1262,7 +1251,7 @@ func (t *AlterableDoltTable) isIncompatibleTypeChange(oldColumn *sql.Column, new
 	}
 
 	existingCol, _ := t.sch.GetAllCols().GetByNameCaseInsensitive(oldColumn.Name)
-	newCol, err := sqlutil.ToDoltCol(schema.SystemTableReservedMin, newColumn)
+	newCol, err := sqlutil.ToDoltCol(newColumn)
 	if err != nil {
 		panic(err) // should be impossible, we check compatibility before this point
 	}
@@ -1443,7 +1432,7 @@ func (t *AlterableDoltTable) RewriteInserter(
 func (t *AlterableDoltTable) getNewSch(ctx context.Context, oldColumn, newColumn *sql.Column, oldSch schema.Schema, newSchema sql.PrimaryKeySchema, root, headRoot *doltdb.RootValue) (schema.Schema, error) {
 	if oldColumn == nil || newColumn == nil {
 		// Adding or dropping a column
-		newSch, err := sqlutil.ToDoltSchema(ctx, root, t.Name(), newSchema, headRoot, sql.CollationID(oldSch.GetCollation()))
+		newSch, err := sqlutil.ToDoltSchema(newSchema, sql.CollationID(oldSch.GetCollation()))
 		if err != nil {
 			return nil, err
 		}
@@ -1472,7 +1461,7 @@ func (t *AlterableDoltTable) getNewSch(ctx context.Context, oldColumn, newColumn
 		}
 	}
 
-	newSch, err := sqlutil.ToDoltSchema(ctx, root, t.Name(), newSchema, headRoot, sql.CollationID(oldSch.GetCollation()))
+	newSch, err := sqlutil.ToDoltSchema(newSchema, sql.CollationID(oldSch.GetCollation()))
 	if err != nil {
 		return nil, err
 	}
@@ -1535,7 +1524,7 @@ func validateSchemaChange(
 	newColumn *sql.Column,
 ) error {
 	if newColumn != nil {
-		newCol, err := sqlutil.ToDoltCol(schema.SystemTableReservedMin, newColumn)
+		newCol, err := sqlutil.ToDoltCol(newColumn)
 		if err != nil {
 			panic(err)
 		}
@@ -1720,7 +1709,7 @@ func (t *AlterableDoltTable) ModifyColumn(ctx *sql.Context, columnName string, c
 		panic(fmt.Sprintf("Column %s not found. This is a bug.", columnName))
 	}
 
-	col, err := sqlutil.ToDoltCol(existingCol.Tag, column)
+	col, err := sqlutil.ToDoltCol(column)
 	if err != nil {
 		return err
 	}

@@ -744,7 +744,7 @@ func TestNewPkOrdinals(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res, err := modifyPkOrdinals(oldSch, tt.newSch)
+			res, err := ModifyPkOrdinals(oldSch, tt.newSch)
 			if tt.err != nil {
 				require.True(t, goerrors.Is(err, tt.err))
 			} else {

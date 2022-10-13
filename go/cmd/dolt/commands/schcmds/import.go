@@ -406,14 +406,9 @@ func CombineColCollections(ctx context.Context, root *doltdb.RootValue, inferred
 		return nil, verr
 	}
 
-	newCols, err := root.GenerateTagsForNewColColl(ctx, impOpts.tableName, newCols)
-	if err != nil {
-		return nil, errhand.BuildDError("failed to generate new schema").AddCause(err).Build()
-	}
-
 	combined := oldCols.AppendColl(newCols)
 
-	err = schema.ValidateForInsert(combined)
+	err := schema.ValidateForInsert(combined)
 	if err != nil {
 		return nil, errhand.BuildDError("invalid schema").AddCause(err).Build()
 	}

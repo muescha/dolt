@@ -140,28 +140,12 @@ func validateNewColumn(
 
 	cols := sch.GetAllCols()
 	err = cols.Iter(func(currColTag uint64, currCol schema.Column) (stop bool, err error) {
-		if currColTag == tag {
-			return false, schema.ErrTagPrevUsed(tag, newColName, tblName)
-		} else if strings.ToLower(currCol.Name) == strings.ToLower(newColName) {
+		if strings.ToLower(currCol.Name) == strings.ToLower(newColName) {
 			return true, fmt.Errorf("A column with the name %s already exists in table %s.", newColName, tblName)
 		}
-
 		return false, nil
 	})
-
-	if err != nil {
-		return err
-	}
-
-	_, tblName, found, err := root.GetTableByColTag(ctx, tag)
-	if err != nil {
-		return err
-	}
-	if found {
-		return schema.ErrTagPrevUsed(tag, newColName, tblName)
-	}
-
-	return nil
+	return err
 }
 
 var ErrPrimaryKeySetsIncompatible = errors.New("primary key sets incompatible")
@@ -286,7 +270,7 @@ func replaceColumnInSchema(sch schema.Schema, oldCol schema.Column, newCol schem
 		}
 	}
 
-	pkOrds, err := modifyPkOrdinals(sch, newSch)
+	pkOrds, err := ModifyPkOrdinals(sch, newSch)
 	if err != nil {
 		return nil, err
 	}
@@ -297,12 +281,12 @@ func replaceColumnInSchema(sch schema.Schema, oldCol schema.Column, newCol schem
 	return newSch, nil
 }
 
-// modifyPkOrdinals tries to create primary key ordinals for a newSch maintaining
+// ModifyPkOrdinals tries to create primary key ordinals for a newSch maintaining
 // the relative positions of PKs from the oldSch. Return an ErrPrimaryKeySetsIncompatible
 // error if the two schemas have a different number of primary keys, or a primary
 // key column's tag changed between the two sets.
 // TODO: move this to schema package
-func modifyPkOrdinals(oldSch, newSch schema.Schema) ([]int, error) {
+func ModifyPkOrdinals(oldSch, newSch schema.Schema) ([]int, error) {
 	if newSch.GetPKCols().Size() != oldSch.GetPKCols().Size() {
 		return nil, ErrPrimaryKeySetsIncompatible
 	}
@@ -561,7 +545,7 @@ func dropColumn(ctx context.Context, tbl *doltdb.Table, colName string) (*doltdb
 		}
 	}
 
-	pkOrds, err := modifyPkOrdinals(sch, newSch)
+	pkOrds, err := ModifyPkOrdinals(sch, newSch)
 	if err != nil {
 		return nil, err
 	}

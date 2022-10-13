@@ -101,62 +101,6 @@ func NewRowWithPks(pkColVals []types.Value, nonPkVals ...types.Value) row.Row {
 	return r
 }
 
-// NewRowWithSchema creates a new row with the using the provided schema.
-func NewRowWithSchema(sch schema.Schema, vals ...types.Value) row.Row {
-	tv := make(row.TaggedValues)
-	var i int
-	sch.GetAllCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
-		tv[tag] = vals[i]
-		i++
-		return false, nil
-	})
-
-	r, err := row.New(types.Format_Default, sch, tv)
-	if err != nil {
-		panic(err)
-	}
-
-	return r
-}
-
-// NewSchema creates a new schema with the pairs of column names and types given.
-// Uses the first column as the primary key.
-func NewSchema(colNamesAndTypes ...interface{}) schema.Schema {
-	return NewSchemaForTable("", colNamesAndTypes...)
-}
-
-// NewSchemaForTable creates a new schema for the table with the name given with the pairs of column names and types
-// given. Uses the first column as the primary key.
-func NewSchemaForTable(tableName string, colNamesAndTypes ...interface{}) schema.Schema {
-	if len(colNamesAndTypes)%2 != 0 {
-		panic("Non-even number of inputs passed to NewSchema")
-	}
-
-	// existingTags *set.Uint64Set, tableName string, existingColKinds []types.NomsKind, newColName string, newColKind types.NomsKind
-	nomsKinds := make([]types.NomsKind, 0)
-	tags := make(schema.TagMapping)
-
-	cols := make([]schema.Column, len(colNamesAndTypes)/2)
-	for i := 0; i < len(colNamesAndTypes); i += 2 {
-		name := colNamesAndTypes[i].(string)
-		nomsKind := colNamesAndTypes[i+1].(types.NomsKind)
-
-		tag := schema.AutoGenerateTag(tags, tableName, nomsKinds, name, nomsKind)
-		tags.Add(tag, tableName)
-		nomsKinds = append(nomsKinds, nomsKind)
-
-		isPk := i/2 == 0
-		var constraints []schema.ColConstraint
-		if isPk {
-			constraints = append(constraints, schema.NotNullConstraint{})
-		}
-		cols[i/2] = schema.NewColumn(name, tag, nomsKind, isPk, constraints...)
-	}
-
-	colColl := schema.NewColCollection(cols...)
-	return schema.MustSchemaFromCols(colColl)
-}
-
 // Returns the logical concatenation of the schemas and rows given, rewriting all tag numbers to begin at zero. The row
 // returned will have a new schema identical to the result of compressSchema.
 func ConcatRows(schemasAndRows ...interface{}) row.Row {

@@ -15,12 +15,8 @@
 package sqlutil
 
 import (
-	"context"
-	"fmt"
-
 	"github.com/dolthub/go-mysql-server/sql"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema/typeinfo"
 	"github.com/dolthub/dolt/go/store/types"
@@ -63,11 +59,7 @@ func FromDoltSchema(tableName string, sch schema.Schema) (sql.PrimaryKeySchema, 
 // ToDoltSchema returns a dolt Schema from the sql schema given, suitable for use in creating a table.
 // For result set schemas, see ToDoltResultSchema.
 func ToDoltSchema(
-	ctx context.Context,
-	root *doltdb.RootValue,
-	tableName string,
 	sqlSchema sql.PrimaryKeySchema,
-	headRoot *doltdb.RootValue,
 	collation sql.CollationID,
 ) (schema.Schema, error) {
 	var cols []schema.Column
@@ -85,17 +77,8 @@ func ToDoltSchema(
 		kinds = append(kinds, ti.NomsKind())
 	}
 
-	tags, err := root.GenerateTagsForNewColumns(ctx, tableName, names, kinds, headRoot)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(tags) != len(sqlSchema.Schema) {
-		return nil, fmt.Errorf("number of tags should equal number of columns")
-	}
-
-	for i, col := range sqlSchema.Schema {
-		convertedCol, err := ToDoltCol(tags[i], col)
+	for _, col := range sqlSchema.Schema {
+		convertedCol, err := ToDoltCol(col)
 		if err != nil {
 			return nil, err
 		}
@@ -124,15 +107,17 @@ func ToDoltSchema(
 }
 
 // ToDoltCol returns the dolt column corresponding to the SQL column given
-func ToDoltCol(tag uint64, col *sql.Column) (schema.Column, error) {
+func ToDoltCol(col *sql.Column) (schema.Column, error) {
 	var constraints []schema.ColConstraint
 	if !col.Nullable || col.PrimaryKey {
 		constraints = append(constraints, schema.NotNullConstraint{})
 	}
+
 	typeInfo, err := typeinfo.FromSqlType(col.Type)
 	if err != nil {
 		return schema.Column{}, err
 	}
+	tag := schema.ColumnTagFromName(col.Name)
 
 	return schema.NewColumnWithTypeInfo(col.Name, tag, typeInfo, col.PrimaryKey, col.Default.String(), col.AutoIncrement, col.Comment, constraints...)
 }
@@ -140,8 +125,8 @@ func ToDoltCol(tag uint64, col *sql.Column) (schema.Column, error) {
 // ToDoltResultSchema returns a dolt Schema from the sql schema given, suitable for use as a result set
 func ToDoltResultSchema(sqlSchema sql.Schema) (schema.Schema, error) {
 	var cols []schema.Column
-	for i, col := range sqlSchema {
-		convertedCol, err := ToDoltCol(uint64(i), col)
+	for _, col := range sqlSchema {
+		convertedCol, err := ToDoltCol(col)
 		if err != nil {
 			return nil, err
 		}

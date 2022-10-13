@@ -357,8 +357,8 @@ func (j *jsonDiffWriter) RowWriter(ctx context.Context, td diff.TableDelta, unio
 
 	// Translate the union schema to its dolt version
 	cols := schema.NewColCollection()
-	for i, col := range unionSch {
-		doltCol, err := sqlutil.ToDoltCol(uint64(i), col)
+	for _, col := range unionSch {
+		doltCol, err := sqlutil.ToDoltCol(col)
 		if err != nil {
 			return nil, err
 		}

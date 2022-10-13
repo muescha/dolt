@@ -441,8 +441,7 @@ func (t *TempTable) Close(ctx *sql.Context) error {
 func temporaryDoltSchema(ctx context.Context, pkSch sql.PrimaryKeySchema, collation sql.CollationID) (sch schema.Schema, err error) {
 	cols := make([]schema.Column, len(pkSch.Schema))
 	for i, col := range pkSch.Schema {
-		tag := uint64(i)
-		cols[i], err = sqlutil.ToDoltCol(tag, col)
+		cols[i], err = sqlutil.ToDoltCol(col)
 		if err != nil {
 			return nil, err
 		}
