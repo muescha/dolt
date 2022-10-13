@@ -129,7 +129,7 @@ func SchemaMerge(format *types.NomsBinFormat, ourSch, theirSch, ancSch schema.Sc
 
 	// TODO: We'll remove this once it's possible to get diff and merge on different primary key sets
 	// TODO: decide how to merge different orders of PKS
-	if !schema.ArePrimaryKeySetsDiffable(format, ourSch, theirSch) {
+	if !doltdb.ArePrimaryKeySetsDiffable(format, ourSch, theirSch) {
 		return nil, SchemaConflict{}, ErrMergeWithDifferentPkSets
 	}
 

@@ -26,6 +26,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema/typeinfo"
+	"github.com/dolthub/dolt/go/libraries/utils/set"
 	"github.com/dolthub/dolt/go/store/chunks"
 	"github.com/dolthub/dolt/go/store/datas"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -422,7 +423,7 @@ func migrateSchema(ctx context.Context, tableName string, existing schema.Schema
 	// substitute VARCHAR(max) for TEXT, VARBINARY(max) for BLOB
 	// TODO: print warning to users
 	var patched bool
-	tags := schema.GetKeyColumnTags(existing)
+	tags := getKeyColumnTags(existing)
 	cols := existing.GetAllCols().GetColumns()
 	for i, c := range cols {
 		if tags.Contains(c.Tag) {
@@ -617,4 +618,15 @@ func (p channelProvider) Next(ctx context.Context) (val.Tuple, val.Tuple) {
 		return nil, nil
 	}
 	return k, v
+}
+
+// getKeyColumnTags returns a set.Uint64Set containing the column tags
+// of every key column of every primary and secondary index in |sch|.
+func getKeyColumnTags(sch schema.Schema) *set.Uint64Set {
+	tags := set.NewUint64Set(sch.GetPKCols().Tags)
+	_ = sch.Indexes().Iter(func(index schema.Index) (stop bool, err error) {
+		tags.Add(index.IndexedColumnTags()...)
+		return
+	})
+	return tags
 }

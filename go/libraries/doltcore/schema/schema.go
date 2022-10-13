@@ -15,14 +15,10 @@
 package schema
 
 import (
-	"fmt"
-	"strings"
+	"errors"
 
 	"github.com/dolthub/vitess/go/vt/proto/query"
-	"gopkg.in/src-d/go-errors.v1"
 
-	"github.com/dolthub/dolt/go/libraries/utils/set"
-	"github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 )
 
@@ -74,31 +70,6 @@ type Schema interface {
 type ColumnOrder struct {
 	First       bool   // True if this column should come first
 	AfterColumn string // Set to the name of the column after which this column should appear
-}
-
-// ColFromTag returns a schema.Column from a schema and a tag
-func ColFromTag(sch Schema, tag uint64) (Column, bool) {
-	return sch.GetAllCols().GetByTag(tag)
-}
-
-// ColFromName returns a schema.Column from a schema from it's name
-func ColFromName(sch Schema, name string) (Column, bool) {
-	return sch.GetAllCols().GetByName(name)
-}
-
-// ExtractAllColNames returns a map of tag to column name, with one map entry for every column in the schema.
-func ExtractAllColNames(sch Schema) (map[uint64]string, error) {
-	colNames := make(map[uint64]string)
-	err := sch.GetAllCols().Iter(func(tag uint64, col Column) (stop bool, err error) {
-		colNames[tag] = col.Name
-		return false, nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return colNames, nil
 }
 
 func IsKeyless(sch Schema) bool {
@@ -162,115 +133,6 @@ func VerifyInSchema(inSch, outSch Schema) (bool, error) {
 	return match, nil
 }
 
-// GetSharedCols return all columns in the schema that match the names and types given, which are parallel arrays
-// specifying columns to match.
-func GetSharedCols(schema Schema, cmpNames []string, cmpKinds []types.NomsKind) []Column {
-	existingCols := make(map[string]Column)
-
-	var shared []Column
-	_ = schema.GetAllCols().Iter(func(tag uint64, col Column) (stop bool, err error) {
-		existingCols[col.Name] = col
-		return false, nil
-	})
-
-	for i, colName := range cmpNames {
-		if col, ok := existingCols[colName]; ok {
-			if col.Kind == cmpKinds[i] && strings.ToLower(col.Name) == strings.ToLower(cmpNames[i]) {
-				shared = append(shared, col)
-			}
-		}
-	}
-
-	return shared
-}
-
-// ArePrimaryKeySetsDiffable checks if two schemas are diffable. Assumes the
-// passed in schema are from the same table between commits. If __DOLT__, then
-// it also checks if the underlying SQL types of the columns are equal.
-func ArePrimaryKeySetsDiffable(format *types.NomsBinFormat, fromSch, toSch Schema) bool {
-	if fromSch == nil && toSch == nil {
-		return false
-		// Empty case
-	} else if fromSch == nil || fromSch.GetAllCols().Size() == 0 ||
-		toSch == nil || toSch.GetAllCols().Size() == 0 {
-		return true
-	}
-
-	// Keyless case for comparing
-	if IsKeyless(fromSch) && IsKeyless(toSch) {
-		return true
-	}
-
-	cc1 := fromSch.GetPKCols()
-	cc2 := toSch.GetPKCols()
-
-	if cc1.Size() != cc2.Size() {
-		return false
-	}
-
-	for i := 0; i < cc1.Size(); i++ {
-		c1 := cc1.GetByIndex(i)
-		c2 := cc2.GetByIndex(i)
-		if (c1.Tag != c2.Tag) || (c1.IsPartOfPK != c2.IsPartOfPK) {
-			return false
-		}
-		if types.IsFormat_DOLT(format) && !c1.TypeInfo.ToSqlType().Equals(c2.TypeInfo.ToSqlType()) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// MapSchemaBasedOnTagAndName can be used to map column values from one schema
-// to another schema. A primary key column in |inSch| is mapped to |outSch| if
-// they share the same tag. A non-primary key column in |inSch| is mapped to
-// |outSch| purely based on the name. It returns ordinal mappings that can be
-// use to map key, value val.Tuple's of schema |inSch| to |outSch|. The first
-// ordinal map is for keys, and the second is for values. If a column of |inSch|
-// is missing in |outSch| then that column's index in the ordinal map holds -1.
-func MapSchemaBasedOnTagAndName(inSch, outSch Schema) ([]int, []int, error) {
-	keyMapping := make([]int, inSch.GetPKCols().Size())
-	valMapping := make([]int, inSch.GetNonPKCols().Size())
-
-	// if inSch or outSch is empty schema. This can be from added or dropped table.
-	if len(inSch.GetAllCols().cols) == 0 || len(outSch.GetAllCols().cols) == 0 {
-		return keyMapping, valMapping, nil
-	}
-
-	err := inSch.GetPKCols().Iter(func(tag uint64, col Column) (stop bool, err error) {
-		i := inSch.GetPKCols().TagToIdx[tag]
-		if col, ok := outSch.GetPKCols().GetByTag(tag); ok {
-			j := outSch.GetPKCols().TagToIdx[col.Tag]
-			keyMapping[i] = j
-		} else {
-			return true, fmt.Errorf("could not map primary key column %s", col.Name)
-		}
-		return false, nil
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	err = inSch.GetNonPKCols().Iter(func(tag uint64, col Column) (stop bool, err error) {
-		i := inSch.GetNonPKCols().TagToIdx[col.Tag]
-		if col, ok := outSch.GetNonPKCols().GetByName(col.Name); ok {
-			j := outSch.GetNonPKCols().TagToIdx[col.Tag]
-			valMapping[i] = j
-		} else {
-			valMapping[i] = -1
-		}
-		return false, nil
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return keyMapping, valMapping, nil
-}
-
-var ErrUsingSpatialKey = errors.NewKind("can't use Spatial Types as Primary Key for table %s")
-
 // IsColSpatialType returns whether a column's type is a spatial type
 func IsColSpatialType(c Column) bool {
 	return c.TypeInfo.ToSqlType().Type() == query.Type_GEOMETRY
@@ -302,13 +164,34 @@ func CopyIndexes(from, to Schema) Schema {
 	return toSch
 }
 
-// GetKeyColumnTags returns a set.Uint64Set containing the column tags
-// of every key column of every primary and secondary index in |sch|.
-func GetKeyColumnTags(sch Schema) *set.Uint64Set {
-	tags := set.NewUint64Set(sch.GetPKCols().Tags)
-	_ = sch.Indexes().Iter(func(index Index) (stop bool, err error) {
-		tags.Add(index.IndexedColumnTags()...)
-		return
-	})
-	return tags
+var ErrPrimaryKeySetsIncompatible = errors.New("primary key sets incompatible")
+
+// ModifyPkOrdinals tries to create primary key ordinals for a newSch maintaining
+// the relative positions of PKs from the oldSch. Return an ErrPrimaryKeySetsIncompatible
+// error if the two schemas have a different number of primary keys, or a primary
+// key column's tag changed between the two sets.
+func ModifyPkOrdinals(oldSch, newSch Schema) ([]int, error) {
+	if newSch.GetPKCols().Size() != oldSch.GetPKCols().Size() {
+		return nil, ErrPrimaryKeySetsIncompatible
+	}
+
+	newPkOrdinals := make([]int, len(newSch.GetPkOrdinals()))
+	for _, newCol := range newSch.GetPKCols().GetColumns() {
+		// ordIdx is the relative primary key order (that stays the same)
+		ordIdx, ok := oldSch.GetPKCols().TagToIdx[newCol.Tag]
+		if !ok {
+			// if pk tag changed, use name to find the new newCol tag
+			oldCol, ok := oldSch.GetPKCols().NameToCol[newCol.Name]
+			if !ok {
+				return nil, ErrPrimaryKeySetsIncompatible
+			}
+			ordIdx = oldSch.GetPKCols().TagToIdx[oldCol.Tag]
+		}
+
+		// ord is the schema ordering index, which may have changed in newSch
+		ord := newSch.GetAllCols().TagToIdx[newCol.Tag]
+		newPkOrdinals[ordIdx] = ord
+	}
+
+	return newPkOrdinals, nil
 }

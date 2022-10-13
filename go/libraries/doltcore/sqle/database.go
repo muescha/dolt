@@ -876,7 +876,7 @@ func (db Database) createSqlTable(ctx *sql.Context, tableName string, sch sql.Pr
 
 	// Prevent any tables that use Spatial Types as Primary Key from being created
 	if schema.IsUsingSpatialColAsKey(doltSch) {
-		return schema.ErrUsingSpatialKey.New(tableName)
+		return ErrUsingSpatialKey.New(tableName)
 	}
 
 	if schema.HasAutoIncrement(doltSch) {

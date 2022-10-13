@@ -21,6 +21,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/durable"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
@@ -74,7 +76,7 @@ func SummaryForTableDelta(ctx context.Context, ch chan DiffSummaryProgress, td T
 		return errhand.BuildDError("cannot retrieve schema for table %s", td.ToName).AddCause(err).Build()
 	}
 
-	if !schema.ArePrimaryKeySetsDiffable(td.Format(), fromSch, toSch) {
+	if !doltdb.ArePrimaryKeySetsDiffable(td.Format(), fromSch, toSch) {
 		return errhand.BuildDError("diff summary will not compute due to primary key set change with table %s", td.CurName()).Build()
 	}
 
@@ -96,7 +98,7 @@ func SummaryForTableDelta(ctx context.Context, ch chan DiffSummaryProgress, td T
 }
 
 func diffProllyTrees(ctx context.Context, ch chan DiffSummaryProgress, keyless bool, from, to durable.Index, fromSch, toSch schema.Schema) error {
-	_, vMapping, err := schema.MapSchemaBasedOnTagAndName(fromSch, toSch)
+	_, vMapping, err := doltdb.MapSchemaBasedOnTagAndName(fromSch, toSch)
 	if err != nil {
 		return err
 	}

@@ -530,7 +530,7 @@ func diffRows(
 ) errhand.VerboseError {
 	from, to := dArgs.fromRef, dArgs.toRef
 
-	diffable := schema.ArePrimaryKeySetsDiffable(td.Format(), td.FromSch, td.ToSch)
+	diffable := doltdb.ArePrimaryKeySetsDiffable(td.Format(), td.FromSch, td.ToSch)
 	canSqlDiff := !(td.ToSch == nil || (td.FromSch != nil && !schema.SchemasAreEqual(td.FromSch, td.ToSch)))
 
 	var toSch, fromSch sql.Schema

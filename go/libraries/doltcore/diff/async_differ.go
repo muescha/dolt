@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/utils/async"
@@ -32,7 +33,7 @@ func NewRowDiffer(ctx context.Context, format *types.NomsBinFormat, fromSch, toS
 	ad := NewAsyncDiffer(buf)
 
 	// Returns an EmptyRowDiffer if the two schemas are not diffable.
-	if !schema.ArePrimaryKeySetsDiffable(format, fromSch, toSch) {
+	if !doltdb.ArePrimaryKeySetsDiffable(format, fromSch, toSch) {
 		return &EmptyRowDiffer{}
 	}
 

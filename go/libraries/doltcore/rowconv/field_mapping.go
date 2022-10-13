@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/untyped"
@@ -263,7 +265,7 @@ func TagMappingWithNameFallback(srcSch, destSch schema.Schema) (*FieldMapping, e
 func TagMappingByTagAndName(srcSch, destSch schema.Schema) (*FieldMapping, error) {
 	srcToDest := make(map[uint64]uint64, destSch.GetAllCols().Size())
 
-	keyMap, valMap, err := schema.MapSchemaBasedOnTagAndName(srcSch, destSch)
+	keyMap, valMap, err := doltdb.MapSchemaBasedOnTagAndName(srcSch, destSch)
 	if err != nil {
 		return nil, err
 	}

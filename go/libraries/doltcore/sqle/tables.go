@@ -1530,7 +1530,7 @@ func validateSchemaChange(
 		}
 
 		if newCol.IsPartOfPK && schema.IsColSpatialType(newCol) {
-			return schema.ErrUsingSpatialKey.New(tableName)
+			return ErrUsingSpatialKey.New(tableName)
 		}
 	}
 	return nil

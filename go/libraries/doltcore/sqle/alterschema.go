@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	errors2 "gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
@@ -30,6 +31,8 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/store/types"
 )
+
+var ErrUsingSpatialKey = errors2.NewKind("can't use Spatial Types as Primary Key for table %s")
 
 // renameTable renames a table with in a RootValue and returns the updated root.
 func renameTable(ctx context.Context, root *doltdb.RootValue, oldName, newName string) (*doltdb.RootValue, error) {
@@ -147,8 +150,6 @@ func validateNewColumn(
 	})
 	return err
 }
-
-var ErrPrimaryKeySetsIncompatible = errors.New("primary key sets incompatible")
 
 // modifyColumn modifies the column with the name given, replacing it with the new definition provided. A column with
 // the name given must exist in the schema of the table.
@@ -270,7 +271,7 @@ func replaceColumnInSchema(sch schema.Schema, oldCol schema.Column, newCol schem
 		}
 	}
 
-	pkOrds, err := ModifyPkOrdinals(sch, newSch)
+	pkOrds, err := schema.ModifyPkOrdinals(sch, newSch)
 	if err != nil {
 		return nil, err
 	}
@@ -279,37 +280,6 @@ func replaceColumnInSchema(sch schema.Schema, oldCol schema.Column, newCol schem
 		return nil, err
 	}
 	return newSch, nil
-}
-
-// ModifyPkOrdinals tries to create primary key ordinals for a newSch maintaining
-// the relative positions of PKs from the oldSch. Return an ErrPrimaryKeySetsIncompatible
-// error if the two schemas have a different number of primary keys, or a primary
-// key column's tag changed between the two sets.
-// TODO: move this to schema package
-func ModifyPkOrdinals(oldSch, newSch schema.Schema) ([]int, error) {
-	if newSch.GetPKCols().Size() != oldSch.GetPKCols().Size() {
-		return nil, ErrPrimaryKeySetsIncompatible
-	}
-
-	newPkOrdinals := make([]int, len(newSch.GetPkOrdinals()))
-	for _, newCol := range newSch.GetPKCols().GetColumns() {
-		// ordIdx is the relative primary key order (that stays the same)
-		ordIdx, ok := oldSch.GetPKCols().TagToIdx[newCol.Tag]
-		if !ok {
-			// if pk tag changed, use name to find the new newCol tag
-			oldCol, ok := oldSch.GetPKCols().NameToCol[newCol.Name]
-			if !ok {
-				return nil, ErrPrimaryKeySetsIncompatible
-			}
-			ordIdx = oldSch.GetPKCols().TagToIdx[oldCol.Tag]
-		}
-
-		// ord is the schema ordering index, which may have changed in newSch
-		ord := newSch.GetAllCols().TagToIdx[newCol.Tag]
-		newPkOrdinals[ordIdx] = ord
-	}
-
-	return newPkOrdinals, nil
 }
 
 func addPrimaryKeyToTable(ctx context.Context, table *doltdb.Table, tableName string, nbf *types.NomsBinFormat, columns []sql.IndexColumn, opts editor.Options) (*doltdb.Table, error) {
@@ -323,7 +293,7 @@ func addPrimaryKeyToTable(ctx context.Context, table *doltdb.Table, tableName st
 	}
 
 	if schema.IsUsingSpatialColAsKey(sch) {
-		return nil, schema.ErrUsingSpatialKey.New(tableName)
+		return nil, ErrUsingSpatialKey.New(tableName)
 	}
 
 	pkColOrdering := make(map[string]int, len(columns))
@@ -545,7 +515,7 @@ func dropColumn(ctx context.Context, tbl *doltdb.Table, colName string) (*doltdb
 		}
 	}
 
-	pkOrds, err := ModifyPkOrdinals(sch, newSch)
+	pkOrds, err := schema.ModifyPkOrdinals(sch, newSch)
 	if err != nil {
 		return nil, err
 	}
