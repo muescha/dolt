@@ -107,10 +107,6 @@ const (
 	// TODO
 	//  CharEnc
 	//  BinaryEnc
-	//  TextEnc
-	//  BlobEnc
-	//  EnumEnc
-	//  SetEnc
 	//  ExpressionEnc
 )
 

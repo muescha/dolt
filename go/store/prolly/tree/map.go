@@ -198,6 +198,23 @@ func (t StaticMap[K, V, O]) Get(ctx context.Context, query K, cb KeyValueFn[K, V
 	return cb(key, value)
 }
 
+func (t StaticMap[K, V, O]) GetOrdinal(ctx context.Context, idx uint64, cb KeyValueFn[K, V]) (err error) {
+	c, err := t.Count()
+	if err != nil {
+		return err
+	} else if idx > uint64(c) {
+		return fmt.Errorf("index (%d) out of bounds", idx)
+	}
+
+	cur, err := NewCursorAtOrdinal(ctx, t.NodeStore, t.Root, idx)
+	if err != nil {
+		return nil
+	}
+	assertTrue(cur.Valid(), "expected valid cursor")
+
+	return cb(K(cur.CurrentKey()), V(cur.CurrentValue()))
+}
+
 func (t StaticMap[K, V, O]) Has(ctx context.Context, query K) (ok bool, err error) {
 	cur, err := NewLeafCursorAtKey(ctx, t.NodeStore, t.Root, query, t.Order)
 	if err != nil {
@@ -276,8 +293,7 @@ func (t StaticMap[K, V, O]) IterAllReverse(ctx context.Context) (*OrderedTreeIte
 func (t StaticMap[K, V, O]) IterOrdinalRange(ctx context.Context, start, stop uint64) (*OrderedTreeIter[K, V], error) {
 	if stop == start {
 		return &OrderedTreeIter[K, V]{curr: nil}, nil
-	}
-	if stop < start {
+	} else if stop < start {
 		return nil, fmt.Errorf("invalid ordinal bounds (%d, %d)", start, stop)
 	} else {
 		c, err := t.Count()

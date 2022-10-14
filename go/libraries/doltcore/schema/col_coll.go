@@ -225,6 +225,15 @@ func (cc *ColCollection) GetByIndex(idx int) Column {
 	return cc.cols[idx]
 }
 
+// NameToIdxMap returns a map[string]int from Column name to ordinal position.
+func (cc *ColCollection) NameToIdxMap() map[string]int {
+	m := make(map[string]int, len(cc.cols))
+	for name, col := range cc.NameToCol {
+		m[name] = cc.TagToIdx[col.Tag]
+	}
+	return m
+}
+
 // Size returns the number of columns in the collection.
 func (cc *ColCollection) Size() int {
 	return len(cc.cols)

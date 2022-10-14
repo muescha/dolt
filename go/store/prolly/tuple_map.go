@@ -235,6 +235,11 @@ func (m Map) Get(ctx context.Context, key val.Tuple, cb tree.KeyValueFn[val.Tupl
 	return m.tuples.Get(ctx, key, cb)
 }
 
+// GetOrdinal returns the key-value pair at ordinal index |idx|.
+func (m Map) GetOrdinal(ctx context.Context, idx uint64, cb tree.KeyValueFn[val.Tuple, val.Tuple]) (err error) {
+	return m.tuples.GetOrdinal(ctx, idx, cb)
+}
+
 // Has returns true is |key| is present in the Map.
 func (m Map) Has(ctx context.Context, key val.Tuple) (ok bool, err error) {
 	return m.tuples.Has(ctx, key)

@@ -15,12 +15,18 @@
 package doltdb_test
 
 import (
+	"context"
+	"sort"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/durable"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dtestutils"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/store/prolly/tree"
 	"github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 )
@@ -42,21 +48,14 @@ type match struct {
 type table struct {
 	name string
 	cols []column
+	rows [][]int64
 }
 
 type column struct {
 	name string
 	enc  val.Encoding
 	pk   bool
-
-	// simulates heuristic column matching
-	// based on sampling fields from row data
-	sample []int
 }
-
-const (
-	heuristicMatchThreshold = 0.5
-)
 
 // Table matching follows a conservative algorithm:
 // matching tables must have the same name and the same set
@@ -74,8 +73,8 @@ func TestTableMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "pk", enc: val.Int32Enc, pk: true},
-						{name: "c0", enc: val.Int32Enc},
+						{name: "pk", enc: val.Int64Enc, pk: true},
+						{name: "c0", enc: val.Int64Enc},
 					},
 				},
 			},
@@ -83,8 +82,8 @@ func TestTableMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "pk", enc: val.Int32Enc, pk: true},
-						{name: "c0", enc: val.Int32Enc},
+						{name: "pk", enc: val.Int64Enc, pk: true},
+						{name: "c0", enc: val.Int64Enc},
 					},
 				},
 			},
@@ -104,8 +103,8 @@ func TestTableMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "a", enc: val.Int32Enc, pk: true},
-						{name: "c0", enc: val.Int32Enc},
+						{name: "a", enc: val.Int64Enc, pk: true},
+						{name: "c0", enc: val.Int64Enc},
 					},
 				},
 			},
@@ -113,8 +112,8 @@ func TestTableMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "b", enc: val.Int32Enc, pk: true},
-						{name: "c0", enc: val.Int32Enc},
+						{name: "b", enc: val.Int64Enc, pk: true},
+						{name: "c0", enc: val.Int64Enc},
 					},
 				},
 			},
@@ -122,7 +121,7 @@ func TestTableMatching(t *testing.T) {
 				{
 					leftTbl: "t", rightTbl: "t",
 					columnMatches: [][2]string{
-						{"pk", "a"},
+						{"a", "b"},
 						{"c0", "c0"},
 					},
 				},
@@ -134,8 +133,8 @@ func TestTableMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "c0", enc: val.Int32Enc},
-						{name: "c1", enc: val.Int32Enc},
+						{name: "c0", enc: val.Int64Enc},
+						{name: "c1", enc: val.Int64Enc},
 					},
 				},
 			},
@@ -143,8 +142,8 @@ func TestTableMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "c0", enc: val.Int32Enc},
-						{name: "c1", enc: val.Int32Enc},
+						{name: "c0", enc: val.Int64Enc},
+						{name: "c1", enc: val.Int64Enc},
 					},
 				},
 			},
@@ -164,8 +163,8 @@ func TestTableMatching(t *testing.T) {
 				{
 					name: "t1",
 					cols: []column{
-						{name: "pk", enc: val.Int32Enc, pk: true},
-						{name: "c0", enc: val.Int32Enc},
+						{name: "pk", enc: val.Int64Enc, pk: true},
+						{name: "c0", enc: val.Int64Enc},
 					},
 				},
 			},
@@ -173,12 +172,15 @@ func TestTableMatching(t *testing.T) {
 				{
 					name: "t2",
 					cols: []column{
-						{name: "pk", enc: val.Int32Enc, pk: true},
-						{name: "c0", enc: val.Int32Enc},
+						{name: "pk", enc: val.Int64Enc, pk: true},
+						{name: "c0", enc: val.Int64Enc},
 					},
 				},
 			},
-			matches: []match{ /* no matches */ },
+			matches: []match{ // no matches
+				{rightTbl: "t2"},
+				{leftTbl: "t1"},
+			},
 		},
 	}
 	for _, test := range tests {
@@ -192,8 +194,8 @@ func TestTableMatching(t *testing.T) {
 // primary keys have already been matched.
 // Matching for non-primary-key is as follows:
 //  1. equal name and type are matched
-//     2a. keyless tables take union of remaining columns
-//     2b. pk tables attempt to heuristically match remaining
+//  2. keyless tables take union of remaining columns
+//  3. pk tables attempt to heuristically match remaining
 //     columns of equal types by sampling rows values
 func TestColumnMatching(t *testing.T) {
 	var tests = []identityTest{
@@ -203,7 +205,7 @@ func TestColumnMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "pk", enc: val.Int32Enc, pk: true},
+						{name: "pk", enc: val.Int64Enc, pk: true},
 						{name: "a", enc: val.DatetimeEnc},
 					},
 				},
@@ -212,7 +214,7 @@ func TestColumnMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "pk", enc: val.Int32Enc, pk: true},
+						{name: "pk", enc: val.Int64Enc, pk: true},
 						{name: "b", enc: val.GeometryEnc},
 					},
 				},
@@ -233,7 +235,7 @@ func TestColumnMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "pk", enc: val.Int32Enc, pk: true},
+						{name: "pk", enc: val.Int64Enc, pk: true},
 						{name: "c0", enc: val.YearEnc},
 					},
 				},
@@ -242,7 +244,7 @@ func TestColumnMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "pk", enc: val.Int32Enc, pk: true},
+						{name: "pk", enc: val.Int64Enc, pk: true},
 						{name: "c0", enc: val.JSONEnc},
 					},
 				},
@@ -263,9 +265,16 @@ func TestColumnMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "pk", enc: val.Int32Enc, pk: true},
-						{name: "a", enc: val.Int64Enc, sample: []int{1, 2, 3, 4, 5}},
-						{name: "b", enc: val.Int64Enc, sample: []int{6, 7, 8, 9, 10}},
+						{name: "pk", enc: val.Int64Enc, pk: true},
+						{name: "a", enc: val.Int64Enc},
+						{name: "b", enc: val.Int64Enc},
+					},
+					rows: [][]int64{
+						{1, 1, -6},
+						{2, 2, -7},
+						{3, 3, -8},
+						{4, 4, -9},
+						{5, 5, -0},
 					},
 				},
 			},
@@ -273,9 +282,16 @@ func TestColumnMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "pk", enc: val.Int32Enc, pk: true},
-						{name: "x", enc: val.Int64Enc, sample: []int{1, 2, 3, -4, -5}},
-						{name: "y", enc: val.Int64Enc, sample: []int{6, 7, -8, -9, -10}},
+						{name: "pk", enc: val.Int64Enc, pk: true},
+						{name: "x", enc: val.Int64Enc},
+						{name: "y", enc: val.Int64Enc},
+					},
+					rows: [][]int64{
+						{1, 1, 1},
+						{2, 0, 0},
+						{3, 3, 0},
+						{4, 0, 0},
+						{5, 5, 0},
 					},
 				},
 			},
@@ -296,8 +312,8 @@ func TestColumnMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "c0", enc: val.Int32Enc, sample: []int{1, 2, 3, 4}},
-						{name: "c1", enc: val.Int32Enc, sample: []int{5, 6, 7, 8}},
+						{name: "c0", enc: val.Int64Enc},
+						{name: "c1", enc: val.Int64Enc},
 					},
 				},
 			},
@@ -305,8 +321,8 @@ func TestColumnMatching(t *testing.T) {
 				{
 					name: "t",
 					cols: []column{
-						{name: "c0", enc: val.Int32Enc, sample: []int{1, 2, 3, 4}},
-						{name: "c2", enc: val.Int32Enc, sample: []int{5, 6, 7, 8}},
+						{name: "c0", enc: val.Int64Enc},
+						{name: "c2", enc: val.Int64Enc},
 					},
 				},
 			},
@@ -329,7 +345,147 @@ func TestColumnMatching(t *testing.T) {
 }
 
 func testIdentity(t *testing.T, test identityTest) {
-	t.Skip("implement me")
+	ctx := context.Background()
+	dEnv := dtestutils.CreateTestEnv()
+	vrw := dEnv.DoltDB.ValueReadWriter()
+	ns := dEnv.DoltDB.NodeStore()
+
+	root, err := doltdb.EmptyRootValue(ctx, vrw, ns)
+	require.NoError(t, err)
+
+	left := root
+	for i := range test.left {
+		dt := buildTestTable(t, vrw, ns, test.left[i])
+		left, err = left.PutTable(ctx, test.left[i].name, dt)
+		require.NoError(t, err)
+	}
+	leftTables, err := allTablesFromRoot(ctx, left)
+	require.NoError(t, err)
+
+	right := root
+	for i := range test.right {
+		dt := buildTestTable(t, vrw, ns, test.right[i])
+		right, err = right.PutTable(ctx, test.right[i].name, dt)
+		require.NoError(t, err)
+	}
+	rightTables, err := allTablesFromRoot(ctx, right)
+	require.NoError(t, err)
+
+	tableMatches, err := doltdb.MatchTablesForRoots(ctx, left, right)
+	require.NoError(t, err)
+
+	assert.Equal(t, len(test.matches), len(tableMatches))
+	for i, m := range test.matches {
+		// todo: needs sorting for multi-table
+		assert.Equal(t, m.leftTbl, tableMatches[i][0])
+		assert.Equal(t, m.rightTbl, tableMatches[i][1])
+	}
+
+	for _, m := range test.matches {
+		if len(m.leftTbl) == 0 || len(m.rightTbl) == 0 {
+			continue // no match
+		}
+		lt, ok := leftTables[m.leftTbl]
+		assert.True(t, ok)
+		rt, ok := rightTables[m.rightTbl]
+		assert.True(t, ok)
+
+		columnMatches, err := doltdb.MatchColumnsForTables(ctx, lt, rt)
+		require.NoError(t, err)
+
+		sortStringPairs(columnMatches)
+		sortStringPairs(m.columnMatches)
+		assert.Equal(t, m.columnMatches, columnMatches)
+	}
+}
+
+func buildTestTable(t *testing.T, vrw types.ValueReadWriter, ns tree.NodeStore, tbl table) *doltdb.Table {
+	cols := make([]schema.Column, len(tbl.cols))
+	for i, c := range tbl.cols {
+		kind := encodingToKind[c.enc]
+		cols[i] = schema.NewColumn(c.name, uint64(i), kind, c.pk)
+	}
+	sch, err := schema.SchemaFromCols(schema.NewColCollection(cols...))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	idx, err := durable.NewEmptyIndex(ctx, vrw, ns, sch)
+	require.NoError(t, err)
+
+	mut := durable.ProllyMapFromIndex(idx).Mutate()
+	kb := val.NewTupleBuilder(sch.GetKeyDescriptor())
+	vb := val.NewTupleBuilder(sch.GetValueDescriptor())
+
+	for i := range tbl.rows {
+		for j := range tbl.rows[i] {
+			if tbl.cols[j].enc != val.Int64Enc {
+				continue // null fill
+			}
+			if j < kb.Desc.Count() {
+				kb.PutInt64(j, int64(tbl.rows[i][j]))
+			} else {
+				v := int64(tbl.rows[i][j])
+				vb.PutInt64(j-kb.Desc.Count(), v)
+			}
+		}
+		err = mut.Put(ctx, kb.Build(ns.Pool()), vb.Build(ns.Pool()))
+		require.NoError(t, err)
+	}
+	pm, err := mut.Map(ctx)
+	require.NoError(t, err)
+
+	idx = durable.IndexFromProllyMap(pm)
+	doltTbl, err := doltdb.NewTable(ctx, vrw, ns, sch, idx, nil, nil)
+	require.NoError(t, err)
+	return doltTbl
+}
+
+func allTablesFromRoot(ctx context.Context, root *doltdb.RootValue) (map[string]*doltdb.Table, error) {
+	tables := make(map[string]*doltdb.Table)
+	err := root.IterTables(ctx, func(name string, table *doltdb.Table, sch schema.Schema) (stop bool, err error) {
+		tables[name] = table
+		return
+	})
+	return tables, err
+}
+
+func sortStringPairs(pairs [][2]string) {
+	// sort by left, then right
+	sort.Slice(pairs, func(i, j int) bool {
+		l, r := pairs[i], pairs[j]
+		return l[0] < r[0] || (l[0] == r[0] && l[1] < r[1])
+	})
+}
+
+var encodingToKind = map[val.Encoding]types.NomsKind{
+	val.NullEnc:      types.NullKind,
+	val.Int8Enc:      types.IntKind,
+	val.Uint8Enc:     types.UintKind,
+	val.Int16Enc:     types.IntKind,
+	val.Uint16Enc:    types.UintKind,
+	val.Int32Enc:     types.IntKind,
+	val.Uint32Enc:    types.UintKind,
+	val.Int64Enc:     types.IntKind,
+	val.Uint64Enc:    types.UintKind,
+	val.Float32Enc:   types.FloatKind,
+	val.Float64Enc:   types.FloatKind,
+	val.Bit64Enc:     types.UintKind,
+	val.Hash128Enc:   types.UUIDKind,
+	val.YearEnc:      types.UintKind,
+	val.DateEnc:      types.TimestampKind,
+	val.TimeEnc:      types.IntKind,
+	val.DatetimeEnc:  types.TimestampKind,
+	val.EnumEnc:      types.UintKind,
+	val.SetEnc:       types.UintKind,
+	val.BytesAddrEnc: types.BlobKind,
+	//val.CommitAddrEnc: types.RefKind,
+	val.StringAddrEnc: types.BlobKind,
+	val.JSONAddrEnc:   types.JSONKind,
+	val.StringEnc:     types.StringKind,
+	val.ByteStringEnc: types.InlineBlobKind,
+	val.DecimalEnc:    types.DecimalKind,
+	val.JSONEnc:       types.JSONKind,
+	val.GeometryEnc:   types.GeometryKind,
 }
 
 func TestArePrimaryKeySetsDiffable(t *testing.T) {
