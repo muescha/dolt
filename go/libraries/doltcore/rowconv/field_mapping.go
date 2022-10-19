@@ -183,36 +183,9 @@ func NameMapperFromFile(mappingFile string, FS filesys.ReadableFS) (NameMapper, 
 // TagMappingByTagAndName takes a source schema and a destination schema and maps
 // pks by tag and non-pks by name.
 func TagMappingByTagAndName(srcSch, destSch schema.Schema) (*FieldMapping, error) {
-	srcToDest := make(map[uint64]uint64, destSch.GetAllCols().Size())
-
-	keyMap, valMap, err := doltdb.MapSchemaBasedOnTagAndName(srcSch, destSch)
+	tagMap, err := doltdb.MatchSchemaColumnsByName(srcSch, destSch)
 	if err != nil {
 		return nil, err
 	}
-
-	var successes int
-	for i, j := range keyMap {
-		if j == -1 {
-			continue
-		}
-		srcTag := srcSch.GetPKCols().GetByIndex(i).Tag
-		dstTag := destSch.GetPKCols().GetByIndex(j).Tag
-		srcToDest[srcTag] = dstTag
-		successes++
-	}
-	for i, j := range valMap {
-		if j == -1 {
-			continue
-		}
-		srcTag := srcSch.GetNonPKCols().GetByIndex(i).Tag
-		dstTag := destSch.GetNonPKCols().GetByIndex(j).Tag
-		srcToDest[srcTag] = dstTag
-		successes++
-	}
-
-	if successes == 0 {
-		return nil, ErrEmptyMapping
-	}
-
-	return NewFieldMapping(srcSch, destSch, srcToDest)
+	return NewFieldMapping(srcSch, destSch, tagMap)
 }

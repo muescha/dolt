@@ -98,7 +98,7 @@ func SummaryForTableDelta(ctx context.Context, ch chan DiffSummaryProgress, td T
 }
 
 func diffProllyTrees(ctx context.Context, ch chan DiffSummaryProgress, keyless bool, from, to durable.Index, fromSch, toSch schema.Schema) error {
-	_, vMapping, err := doltdb.MapSchemaBasedOnTagAndName(fromSch, toSch)
+	_, vMapping, err := doltdb.MapSchemaByColumnName(fromSch, toSch)
 	if err != nil {
 		return err
 	}

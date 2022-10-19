@@ -230,7 +230,7 @@ func TestColumnMatching(t *testing.T) {
 			},
 		},
 		{
-			name: "unmatched columns with name collision",
+			name: "matched columns with differing types",
 			left: []table{
 				{
 					name: "t",
@@ -254,7 +254,7 @@ func TestColumnMatching(t *testing.T) {
 					leftTbl: "t", rightTbl: "t",
 					columnMatches: [][2]string{
 						{"pk", "pk"},
-						// columns 'c0', 'c0' unmatched
+						{"c0", "c0"},
 					},
 				},
 			},
@@ -390,8 +390,21 @@ func testIdentity(t *testing.T, test identityTest) {
 		rt, ok := rightTables[m.rightTbl]
 		assert.True(t, ok)
 
-		columnMatches, err := doltdb.MatchColumnsForTables(ctx, lt, rt)
+		rsch, err := rt.GetSchema(ctx)
 		require.NoError(t, err)
+		lsch, err := lt.GetSchema(ctx)
+		require.NoError(t, err)
+
+		tagMap, err := doltdb.MatchSchemaColumnsByName(rsch, lsch)
+		require.NoError(t, err)
+
+		var columnMatches [][2]string
+		for l, r := range tagMap {
+			columnMatches = append(columnMatches, [2]string{
+				lsch.GetAllCols().TagToCol[l].Name,
+				rsch.GetAllCols().TagToCol[r].Name,
+			})
+		}
 
 		sortStringPairs(columnMatches)
 		sortStringPairs(m.columnMatches)
@@ -573,7 +586,7 @@ func TestArePrimaryKeySetsDiffable(t *testing.T) {
 
 			// If they are diffable then we should be able to map their schemas from one to another.
 			if d {
-				keyMap, _, err := doltdb.MapSchemaBasedOnTagAndName(test.From, test.To)
+				keyMap, _, err := doltdb.MapSchemaByColumnName(test.From, test.To)
 				require.NoError(t, err)
 				require.Equal(t, test.KeyMap, keyMap)
 			}

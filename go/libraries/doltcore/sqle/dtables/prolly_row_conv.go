@@ -42,8 +42,13 @@ type ProllyRowConverter struct {
 	ns               tree.NodeStore
 }
 
-func NewProllyRowConverter(inSch, outSch schema.Schema, warnFn rowconv.WarnFunction, ns tree.NodeStore) (ProllyRowConverter, error) {
-	keyProj, valProj, err := doltdb.MapSchemaBasedOnTagAndName(inSch, outSch)
+func NewProllyRowConverter(
+	ctx context.Context,
+	inSch, outSch schema.Schema,
+	warnFn rowconv.WarnFunction,
+	ns tree.NodeStore,
+) (ProllyRowConverter, error) {
+	keyProj, valProj, err := doltdb.MapSchemaByColumnName(inSch, outSch)
 	if err != nil {
 		return ProllyRowConverter{}, err
 	}

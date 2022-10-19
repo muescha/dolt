@@ -54,25 +54,21 @@ type commitInfo struct {
 
 func newNomsDiffIter(ctx *sql.Context, ddb *doltdb.DoltDB, joiner *rowconv.Joiner, dp DiffPartition, lookup sql.IndexLookup) (*diffRowItr, error) {
 	fromData, fromSch, err := tableData(ctx, dp.from, ddb)
-
 	if err != nil {
 		return nil, err
 	}
 
 	toData, toSch, err := tableData(ctx, dp.to, ddb)
-
 	if err != nil {
 		return nil, err
 	}
 
 	fromConv, err := dp.rowConvForSchema(ctx, ddb.ValueReadWriter(), dp.fromSch, fromSch)
-
 	if err != nil {
 		return nil, err
 	}
 
 	toConv, err := dp.rowConvForSchema(ctx, ddb.ValueReadWriter(), dp.toSch, toSch)
-
 	if err != nil {
 		return nil, err
 	}
@@ -244,17 +240,17 @@ func newProllyDiffIter(ctx *sql.Context, dp DiffPartition, ddb *doltdb.DoltDB, t
 	}
 
 	// dp.from may be nil
-	f, fSch, err := tableData(ctx, dp.from, ddb)
+	fIdx, fSch, err := tableData(ctx, dp.from, ddb)
 	if err != nil {
 		return prollyDiffIter{}, nil
 	}
-	from := durable.ProllyMapFromIndex(f)
+	from := durable.ProllyMapFromIndex(fIdx)
 
-	t, tSch, err := tableData(ctx, dp.to, ddb)
+	tIdx, tSch, err := tableData(ctx, dp.to, ddb)
 	if err != nil {
 		return prollyDiffIter{}, nil
 	}
-	to := durable.ProllyMapFromIndex(t)
+	to := durable.ProllyMapFromIndex(tIdx)
 
 	var nodeStore tree.NodeStore
 	if dp.to != nil {
@@ -263,12 +259,12 @@ func newProllyDiffIter(ctx *sql.Context, dp DiffPartition, ddb *doltdb.DoltDB, t
 		nodeStore = dp.from.NodeStore()
 	}
 
-	fromConverter, err := NewProllyRowConverter(fSch, targetFromSchema, ctx.Warn, nodeStore)
+	fromConverter, err := NewProllyRowConverter(ctx, fSch, targetFromSchema, ctx.Warn, nodeStore)
 	if err != nil {
 		return prollyDiffIter{}, err
 	}
 
-	toConverter, err := NewProllyRowConverter(tSch, targetToSchema, ctx.Warn, nodeStore)
+	toConverter, err := NewProllyRowConverter(ctx, tSch, targetToSchema, ctx.Warn, nodeStore)
 	if err != nil {
 		return prollyDiffIter{}, err
 	}

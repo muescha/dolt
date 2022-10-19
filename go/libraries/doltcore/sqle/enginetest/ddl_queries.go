@@ -503,8 +503,8 @@ var ModifyColumnTypeScripts = []queries.ScriptTest{
 		},
 		Assertions: []queries.ScriptTestAssertion{
 			{
-				Query:       "alter table point_tbl modify column p point primary key",
-				ExpectedErr: schema.ErrUsingSpatialKey,
+				Query:          "alter table point_tbl modify column p point primary key",
+				ExpectedErrStr: schema.ErrUsingSpatialKey.Error(),
 			},
 		},
 	},

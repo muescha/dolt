@@ -505,12 +505,12 @@ func (dps *DiffPartitions) Close(*sql.Context) error {
 }
 
 // rowConvForSchema creates a RowConverter for transforming rows with the given schema a target schema.
-func (dp DiffPartition) rowConvForSchema(ctx context.Context, vrw types.ValueReadWriter, targetSch, srcSch schema.Schema) (*rowconv.RowConverter, error) {
+func (dp DiffPartition) rowConvForSchema(ctx context.Context, vrw types.ValueReadWriter, destSch, srcSch schema.Schema) (*rowconv.RowConverter, error) {
 	if schema.SchemasAreEqual(srcSch, schema.EmptySchema) {
 		return rowconv.IdentityConverter, nil
 	}
 
-	fm, err := rowconv.TagMappingByTagAndName(srcSch, targetSch)
+	fm, err := rowconv.TagMappingByTagAndName(srcSch, destSch)
 	if err != nil {
 		return nil, err
 	}

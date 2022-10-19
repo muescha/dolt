@@ -19,6 +19,7 @@ import (
 
 	"github.com/dolthub/vitess/go/vt/proto/query"
 
+	"github.com/dolthub/dolt/go/libraries/utils/set"
 	"github.com/dolthub/dolt/go/store/val"
 )
 
@@ -103,9 +104,9 @@ func SchemasAreEqual(sch1, sch2 Schema) bool {
 	return sch1.Indexes().Equals(sch2.Indexes())
 }
 
-// TODO: this function never returns an error
 // VerifyInSchema tests that the incoming schema matches the schema from the original table
 // based on the presence of the column name in the original schema.
+// TODO: this function never returns an error
 func VerifyInSchema(inSch, outSch Schema) (bool, error) {
 	inSchCols := inSch.GetAllCols()
 	outSchCols := outSch.GetAllCols()
@@ -165,6 +166,7 @@ func CopyIndexes(from, to Schema) Schema {
 }
 
 var ErrPrimaryKeySetsIncompatible = errors.New("primary key sets incompatible")
+var ErrUsingSpatialKey = errors.New("can't use Spatial Types as Primary Key for table %s")
 
 // ModifyPkOrdinals tries to create primary key ordinals for a newSch maintaining
 // the relative positions of PKs from the oldSch. Return an ErrPrimaryKeySetsIncompatible
@@ -194,4 +196,15 @@ func ModifyPkOrdinals(oldSch, newSch Schema) ([]int, error) {
 	}
 
 	return newPkOrdinals, nil
+}
+
+// GetKeyColumnTags returns a set.Uint64Set containing the column tags
+// of every key column of every primary and secondary index in |sch|.
+func GetKeyColumnTags(sch Schema) *set.Uint64Set {
+	tags := set.NewUint64Set(sch.GetPKCols().Tags)
+	_ = sch.Indexes().Iter(func(index Index) (stop bool, err error) {
+		tags.Add(index.IndexedColumnTags()...)
+		return
+	})
+	return tags
 }
