@@ -24,15 +24,9 @@ import (
 // but a different name or type
 var ErrColTagCollision = errors.New("two different columns with the same tag")
 
-// ErrColNotFound is an error that is returned when attempting an operation on a column that does not exist
-var ErrColNotFound = errors.New("column not found")
-
 // ErrColNameCollision is an error that is returned when two columns within a ColCollection have the same name but a
 // different type or tag
 var ErrColNameCollision = errors.New("two different columns with the same name exist")
-
-// ErrNoPrimaryKeyColumns is an error that is returned when no primary key columns are found
-var ErrNoPrimaryKeyColumns = errors.New("no primary key columns")
 
 var ErrNonAutoIncType = errors.New("column type cannot be auto incremented")
 

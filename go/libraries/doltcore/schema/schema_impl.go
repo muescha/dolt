@@ -27,8 +27,6 @@ import (
 	"github.com/dolthub/dolt/go/store/val"
 )
 
-var FeatureFlagKeylessSchema = true
-
 // EmptySchema is an instance of a schema with no columns.
 var EmptySchema = &schemaImpl{
 	pkCols:          EmptyColColl,
@@ -63,10 +61,6 @@ func SchemaFromCols(allCols *ColCollection) (Schema, error) {
 		} else {
 			nonPKCols = append(nonPKCols, c)
 		}
-	}
-
-	if len(pkCols) == 0 && !FeatureFlagKeylessSchema {
-		return nil, ErrNoPrimaryKeyColumns
 	}
 
 	pkColColl := NewColCollection(pkCols...)
@@ -119,22 +113,10 @@ func ValidateColumnConstraints(allCols *ColCollection) error {
 
 // ValidateForInsert returns an error if the given schema cannot be written to the dolt database.
 func ValidateForInsert(allCols *ColCollection) error {
-	var seenPkCol bool
-	for _, c := range allCols.cols {
-		if c.IsPartOfPK {
-			seenPkCol = true
-			break
-		}
-	}
-
-	if !seenPkCol && !FeatureFlagKeylessSchema {
-		return ErrNoPrimaryKeyColumns
-	}
-
 	colNames := make(map[string]bool)
 	colTags := make(map[uint64]bool)
 
-	err := allCols.Iter(func(tag uint64, col Column) (stop bool, err error) {
+	return allCols.Iter(func(tag uint64, col Column) (stop bool, err error) {
 		if _, ok := colTags[tag]; ok {
 			return true, ErrColTagCollision
 		}
@@ -151,8 +133,6 @@ func ValidateForInsert(allCols *ColCollection) error {
 
 		return false, nil
 	})
-
-	return err
 }
 
 // isAutoIncrementKind returns true is |k| is a numeric kind.
