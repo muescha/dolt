@@ -14,8 +14,13 @@
 
 package schema
 
-import "github.com/zeebo/xxh3"
+import (
+	"strings"
+
+	"github.com/zeebo/xxh3"
+)
 
 func ColumnTagFromName(name string) uint64 {
-	return uint64(uint16(xxh3.HashString(name)))
+	h64 := xxh3.HashString(strings.ToLower(name))
+	return uint64(uint16(h64))
 }

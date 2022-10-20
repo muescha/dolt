@@ -23,55 +23,15 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/utils/set"
 	"github.com/dolthub/dolt/go/store/hash"
-	"github.com/dolthub/dolt/go/store/types"
 )
 
 // ForeignKeyCollection represents the collection of foreign keys for a root value.
 type ForeignKeyCollection struct {
 	foreignKeys map[string]ForeignKey
 }
-
-// ForeignKeyViolationError represents a set of foreign key violations for a table.
-type ForeignKeyViolationError struct {
-	ForeignKey    ForeignKey
-	Schema        schema.Schema
-	ViolationRows []row.Row
-}
-
-// Error implements the interface error.
-func (f *ForeignKeyViolationError) Error() string {
-	if len(f.ViolationRows) == 0 {
-		return "no violations were found, should not be an error"
-	}
-	sb := strings.Builder{}
-	const earlyTerminationLimit = 50
-	terminatedEarly := false
-	for i := range f.ViolationRows {
-		if i >= earlyTerminationLimit {
-			terminatedEarly = true
-			break
-		}
-		key, _ := f.ViolationRows[i].NomsMapKey(f.Schema).Value(context.Background())
-		val, _ := f.ViolationRows[i].NomsMapValue(f.Schema).Value(context.Background())
-		valSlice, _ := val.(types.Tuple).AsSlice()
-		all, _ := key.(types.Tuple).Append(valSlice...)
-		str, _ := types.EncodedValue(context.Background(), all)
-		sb.WriteRune('\n')
-		sb.WriteString(str)
-	}
-	if terminatedEarly {
-		return fmt.Sprintf("foreign key violations on `%s`.`%s`:%s\n%d more violations are not being displayed",
-			f.ForeignKey.Name, f.ForeignKey.TableName, sb.String(), len(f.ViolationRows)-earlyTerminationLimit)
-	} else {
-		return fmt.Sprintf("foreign key violations on `%s`.`%s`:%s", f.ForeignKey.Name, f.ForeignKey.TableName, sb.String())
-	}
-}
-
-var _ error = (*ForeignKeyViolationError)(nil)
 
 type ForeignKeyReferentialAction byte
 
@@ -106,6 +66,16 @@ type UnresolvedFKDetails struct {
 // EqualDefs returns whether two foreign keys have the same definition over the same column sets.
 // It does not compare table names or foreign key names.
 func (fk ForeignKey) EqualDefs(other ForeignKey) bool {
+	if ok := fk.equalColumns(other); !ok {
+		return false
+	}
+	return fk.Name == other.Name &&
+		fk.OnUpdate == other.OnUpdate &&
+		fk.OnDelete == other.OnDelete
+}
+
+// equalColumns checks if |fk| and |other| are defined over the same column sets.
+func (fk ForeignKey) equalColumns(other ForeignKey) bool {
 	if len(fk.TableColumns) != len(other.TableColumns) || len(fk.ReferencedTableColumns) != len(other.ReferencedTableColumns) {
 		return false
 	}
@@ -119,9 +89,7 @@ func (fk ForeignKey) EqualDefs(other ForeignKey) bool {
 			return false
 		}
 	}
-	return fk.Name == other.Name &&
-		fk.OnUpdate == other.OnUpdate &&
-		fk.OnDelete == other.OnDelete
+	return true
 }
 
 // DeepEquals compares all attributes of a foreign key to another, including name and table names.
@@ -242,10 +210,13 @@ func (fkc *ForeignKeyCollection) AddKeys(fks ...ForeignKey) error {
 			return fmt.Errorf("foreign keys must have the same number of columns declared and referenced")
 		}
 		if key.IsResolved() {
-			if _, ok := fkc.GetByTags(key.TableColumns, key.ReferencedTableColumns); ok {
+			existing, _ := fkc.KeysForTable(key.TableName)
+			for _, e := range existing {
 				// this differs from MySQL's logic
-				return fmt.Errorf("a foreign key over columns %v and referenced columns %v already exists",
-					key.TableColumns, key.ReferencedTableColumns)
+				if key.equalColumns(e) {
+					return fmt.Errorf("a foreign key over columns %v and referenced columns %v already exists",
+						key.TableColumns, key.ReferencedTableColumns)
+				}
 			}
 		}
 
