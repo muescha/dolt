@@ -23,7 +23,6 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
-	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
@@ -47,6 +46,7 @@ type DoltDatabaseProvider struct {
 	databases          map[string]sql.Database
 	functions          map[string]sql.Function
 	externalProcedures sql.ExternalStoredProcedureRegistry
+	InitDatabaseHook   InitDatabaseHook
 	mu                 *sync.RWMutex
 
 	defaultBranch string
@@ -54,6 +54,7 @@ type DoltDatabaseProvider struct {
 	remoteDialer  dbfactory.GRPCDialProvider // TODO: why isn't this a method defined on the remote object
 
 	dbFactoryUrl string
+	isStandby    *bool
 }
 
 var _ sql.DatabaseProvider = (*DoltDatabaseProvider)(nil)
@@ -114,6 +115,8 @@ func NewDoltDatabaseProviderWithDatabases(defaultBranch string, fs filesys.Files
 		fs:                 fs,
 		defaultBranch:      defaultBranch,
 		dbFactoryUrl:       doltdb.LocalDirDoltDB,
+		InitDatabaseHook:   ConfigureReplicationDatabaseHook,
+		isStandby:          new(bool),
 	}, nil
 }
 
@@ -146,6 +149,15 @@ func (p DoltDatabaseProvider) FileSystem() filesys.Filesys {
 	return p.fs
 }
 
+// If this DatabaseProvider is set to standby |true|, it returns every dolt
+// database as a read only database. Set back to |false| to get read-write
+// behavior from dolt databases again.
+func (p DoltDatabaseProvider) SetIsStandby(standby bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	*p.isStandby = standby
+}
+
 // FileSystemForDatabase returns a filesystem, with the working directory set to the root directory
 // of the requested database. If the requested database isn't found, a database not found error
 // is returned.
@@ -166,9 +178,10 @@ func (p DoltDatabaseProvider) Database(ctx *sql.Context, name string) (db sql.Da
 	var ok bool
 	p.mu.RLock()
 	db, ok = p.databases[formatDbMapKeyName(name)]
+	standby := *p.isStandby
 	p.mu.RUnlock()
 	if ok {
-		return db, nil
+		return wrapForStandby(db, standby), nil
 	}
 
 	db, _, ok, err = p.databaseForRevision(ctx, name)
@@ -187,7 +200,21 @@ func (p DoltDatabaseProvider) Database(ctx *sql.Context, name string) (db sql.Da
 	}
 
 	// Don't track revision databases, just instantiate them on demand
-	return db, nil
+	return wrapForStandby(db, standby), nil
+}
+
+func wrapForStandby(db sql.Database, standby bool) sql.Database {
+	if !standby {
+		return db
+	}
+	if _, ok := db.(ReadOnlyDatabase); ok {
+		return db
+	}
+	if db, ok := db.(Database); ok {
+		// :-/. Hopefully it's not too sliced.
+		return ReadOnlyDatabase{db}
+	}
+	return db
 }
 
 // attemptCloneReplica attempts to clone a database from the configured replication remote URL template, returning an error
@@ -347,8 +374,10 @@ func (p DoltDatabaseProvider) CreateDatabase(ctx *sql.Context, name string) erro
 		return err
 	}
 
-	// If replication is configured, set it up for the new database as well
-	err = p.configureReplication(ctx, name, newEnv)
+	// If we have an initialization hook, invoke it.  By default, this will
+	// be ConfigureReplicationDatabaseHook, which will setup replication
+	// for the new database if a remote url template is set.
+	err = p.InitDatabaseHook(ctx, p, name, newEnv)
 	if err != nil {
 		return err
 	}
@@ -365,9 +394,11 @@ func (p DoltDatabaseProvider) CreateDatabase(ctx *sql.Context, name string) erro
 	return sess.AddDB(ctx, dbstate)
 }
 
+type InitDatabaseHook func(ctx *sql.Context, pro DoltDatabaseProvider, name string, env *env.DoltEnv) error
+
 // configureReplication sets up replication for a newly created database as necessary
 // TODO: consider the replication heads / all heads setting
-func (p DoltDatabaseProvider) configureReplication(ctx *sql.Context, name string, newEnv *env.DoltEnv) error {
+func ConfigureReplicationDatabaseHook(ctx *sql.Context, p DoltDatabaseProvider, name string, newEnv *env.DoltEnv) error {
 	_, replicationRemoteName, _ := sql.SystemVariables.GetGlobal(dsess.ReplicateToRemote)
 	if replicationRemoteName == "" {
 		return nil
@@ -399,7 +430,7 @@ func (p DoltDatabaseProvider) configureReplication(ctx *sql.Context, name string
 	}
 
 	err = newEnv.AddRemote(r)
-	if err != nil {
+	if err != env.ErrRemoteAlreadyExists && err != nil {
 		return err
 	}
 
@@ -417,7 +448,11 @@ func (p DoltDatabaseProvider) configureReplication(ctx *sql.Context, name string
 }
 
 // CloneDatabaseFromRemote implements DoltDatabaseProvider interface
-func (p DoltDatabaseProvider) CloneDatabaseFromRemote(ctx *sql.Context, dbName, branch, remoteName, remoteUrl string, remoteParams map[string]string) error {
+func (p DoltDatabaseProvider) CloneDatabaseFromRemote(
+	ctx *sql.Context,
+	dbName, branch, remoteName, remoteUrl string,
+	remoteParams map[string]string,
+) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -428,7 +463,7 @@ func (p DoltDatabaseProvider) CloneDatabaseFromRemote(ctx *sql.Context, dbName, 
 		return fmt.Errorf("cannot create DB, file exists at %s", dbName)
 	}
 
-	err := p.cloneDatabaseFromRemote(ctx, dbName, remoteName, branch, remoteUrl, remoteParams)
+	dEnv, err := p.cloneDatabaseFromRemote(ctx, dbName, remoteName, branch, remoteUrl, remoteParams)
 	if err != nil {
 		// Make a best effort to clean up any artifacts on disk from a failed clone
 		// before we return the error
@@ -442,7 +477,7 @@ func (p DoltDatabaseProvider) CloneDatabaseFromRemote(ctx *sql.Context, dbName, 
 		return err
 	}
 
-	return nil
+	return ConfigureReplicationDatabaseHook(ctx, p, dbName, dEnv)
 }
 
 // cloneDatabaseFromRemote encapsulates the inner logic for cloning a database so that if any error
@@ -453,26 +488,26 @@ func (p DoltDatabaseProvider) cloneDatabaseFromRemote(
 	ctx *sql.Context,
 	dbName, remoteName, branch, remoteUrl string,
 	remoteParams map[string]string,
-) error {
+) (*env.DoltEnv, error) {
 	if p.remoteDialer == nil {
-		return fmt.Errorf("unable to clone remote database; no remote dialer configured")
+		return nil, fmt.Errorf("unable to clone remote database; no remote dialer configured")
 	}
 
 	// TODO: params for AWS, others that need them
 	r := env.NewRemote(remoteName, remoteUrl, nil)
-	srcDB, err := getRemoteDb(ctx, r, p.remoteDialer)
+	srcDB, err := r.GetRemoteDB(ctx, types.Format_Default, p.remoteDialer)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	dEnv, err := actions.EnvForClone(ctx, srcDB.ValueReadWriter().Format(), r, dbName, p.fs, "VERSION", env.GetCurrentUserHomeDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = actions.CloneRemote(ctx, srcDB, remoteName, branch, dEnv)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = dEnv.RepoStateWriter().UpdateBranch(dEnv.RepoState.CWBHeadRef().GetPath(), env.BranchConfig{
@@ -483,7 +518,7 @@ func (p DoltDatabaseProvider) cloneDatabaseFromRemote(
 	sess := dsess.DSessFromSess(ctx.Session)
 	fkChecks, err := ctx.GetSessionVariable(ctx, "foreign_key_checks")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	opts := editor.Options{
@@ -494,29 +529,22 @@ func (p DoltDatabaseProvider) cloneDatabaseFromRemote(
 
 	db, err := NewDatabase(ctx, dbName, dEnv.DbData(), opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	p.databases[formatDbMapKeyName(db.Name())] = db
 
 	dbstate, err := GetInitialDBState(ctx, db)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return sess.AddDB(ctx, dbstate)
-}
-
-// TODO: extract a shared library for this functionality
-// TODO: this method only adds error handling. Remove?
-func getRemoteDb(ctx *sql.Context, r env.Remote, dialer dbfactory.GRPCDialProvider) (*doltdb.DoltDB, error) {
-	ddb, err := r.GetRemoteDB(ctx, types.Format_Default, dialer)
+	err = sess.AddDB(ctx, dbstate)
 	if err != nil {
-		bdr := errhand.BuildDError("error: failed to get remote db").AddCause(err)
-		return nil, bdr.Build()
+		return nil, err
 	}
 
-	return ddb, nil
+	return dEnv, nil
 }
 
 // DropDatabase implements the sql.MutableDatabaseProvider interface
@@ -539,21 +567,44 @@ func (p DoltDatabaseProvider) DropDatabase(ctx *sql.Context, name string) error 
 	dbKey := formatDbMapKeyName(name)
 	db := p.databases[dbKey]
 
-	// Get the DB's directory
-	exists, isDir := p.fs.Exists(db.Name())
-	if !exists {
-		// engine should already protect against this
+	// get location of database that's being dropped
+	dbLoc := p.dbLocations[dbKey]
+	if dbLoc == nil {
 		return sql.ErrDatabaseNotFound.New(db.Name())
-	} else if !isDir {
-		return fmt.Errorf("unexpected error: %s exists but is not a directory", dbKey)
 	}
-
-	err = p.fs.Delete(db.Name(), true)
+	dropDbLoc, err := dbLoc.Abs("")
 	if err != nil {
 		return err
 	}
+	rootDbLoc, err := p.fs.Abs("")
+	if err != nil {
+		return err
+	}
+	dirToDelete := ""
+	// if the database is in the directory itself, we remove '.dolt' directory rather than
+	// the whole directory itself because it can have other databases that are nested.
+	if rootDbLoc == dropDbLoc {
+		doltDirExists, _ := p.fs.Exists(dbfactory.DoltDir)
+		if !doltDirExists {
+			return sql.ErrDatabaseNotFound.New(db.Name())
+		}
+		dirToDelete = dbfactory.DoltDir
+	} else {
+		exists, isDir := p.fs.Exists(dropDbLoc)
+		// Get the DB's directory
+		if !exists {
+			// engine should already protect against this
+			return sql.ErrDatabaseNotFound.New(db.Name())
+		} else if !isDir {
+			return fmt.Errorf("unexpected error: %s exists but is not a directory", dbKey)
+		}
+		dirToDelete = dropDbLoc
+	}
 
-	// TODO: delete database in current dir
+	err = p.fs.Delete(dirToDelete, true)
+	if err != nil {
+		return err
+	}
 
 	// We not only have to delete this database, but any derivative ones that we've stored as a result of USE or
 	// connection strings
@@ -777,8 +828,15 @@ func (p DoltDatabaseProvider) ExternalStoredProcedures(_ *sql.Context, name stri
 func (p DoltDatabaseProvider) TableFunction(_ *sql.Context, name string) (sql.TableFunction, error) {
 	// currently, only one table function is supported, if we extend this, we should clean this up
 	// and store table functions in a map, similar to regular functions.
-	if strings.ToLower(name) == "dolt_diff" {
+	switch strings.ToLower(name) {
+	case "dolt_diff":
 		dtf := &DiffTableFunction{}
+		return dtf, nil
+	case "dolt_diff_summary":
+		dtf := &DiffSummaryTableFunction{}
+		return dtf, nil
+	case "dolt_log":
+		dtf := &LogTableFunction{}
 		return dtf, nil
 	}
 
@@ -979,6 +1037,21 @@ func dbRevisionForBranch(ctx context.Context, srcDb SqlDatabase, revSpec string)
 		}
 	}
 
+	remotes, err := static.GetRemotes()
+	if err != nil {
+		return nil, dsess.InitialDbState{}, err
+	}
+
+	branches, err := static.GetBranches()
+	if err != nil {
+		return nil, dsess.InitialDbState{}, err
+	}
+
+	backups, err := static.GetBackups()
+	if err != nil {
+		return nil, dsess.InitialDbState{}, err
+	}
+
 	init := dsess.InitialDbState{
 		Db:         db,
 		HeadCommit: cm,
@@ -988,6 +1061,10 @@ func dbRevisionForBranch(ctx context.Context, srcDb SqlDatabase, revSpec string)
 			Rsw: static,
 			Rsr: static,
 		},
+		Remotes:  remotes,
+		Branches: branches,
+		Backups:  backups,
+		//ReadReplica: //todo
 	}
 
 	return db, init, nil
@@ -1019,6 +1096,11 @@ func dbRevisionForTag(ctx context.Context, srcDb Database, revSpec string) (Read
 			Rsw: srcDb.DbData().Rsw,
 			Rsr: srcDb.DbData().Rsr,
 		},
+		// todo: should we initialize
+		//  - Remotes
+		//  - Branches
+		//  - Backups
+		//  - ReadReplicas
 	}
 
 	return db, init, nil
@@ -1053,6 +1135,11 @@ func dbRevisionForCommit(ctx context.Context, srcDb Database, revSpec string) (R
 			Rsw: srcDb.DbData().Rsw,
 			Rsr: srcDb.DbData().Rsr,
 		},
+		// todo: should we initialize
+		//  - Remotes
+		//  - Branches
+		//  - Backups
+		//  - ReadReplicas
 	}
 
 	return db, init, nil

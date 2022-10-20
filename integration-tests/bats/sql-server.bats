@@ -53,7 +53,7 @@ teardown() {
     cd repo1
     dolt sql -q "create user dolt@'%' identified by '123'"
 
-    let PORT="$$ % (65536-1024) + 1024"
+    PORT=$( definePORT )
     dolt sql-server --port=$PORT --user dolt > log.txt 2>&1 &
     SERVER_PID=$!
     sleep 5
@@ -137,131 +137,6 @@ SET @@aws_credentials_file="/Users/should_fail";
 SQL
     echo $output
     [[ "$output" =~ "Variable 'aws_credentials_file' is a read only variable" ]] || false
-}
-
-
-@test "sql-server: port in use" {
-    cd repo1
-
-    let PORT="$$ % (65536-1024) + 1024"
-    dolt sql-server --host 0.0.0.0 --port=$PORT --user dolt &
-    SERVER_PID=$! # will get killed by teardown_common
-    sleep 5 # not using python wait so this works on windows
-
-    run dolt sql-server --host 0.0.0.0 --port=$PORT --user dolt
-    [ "$status" -eq 1 ]
-    [[ "$output" =~ "in use" ]] || false
-}
-
-@test "sql-server: test autocommit" {
-    skiponwindows "Missing dependencies"
-
-    cd repo1
-    start_sql_server repo1
-
-    # No tables at the start
-    run dolt ls
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ "No tables in working set" ]] || false
-
-    # create table with autocommit off and verify there are still no tables
-    server_query repo1 0 dolt "" "CREATE TABLE one_pk (
-        pk BIGINT NOT NULL COMMENT 'tag:0',
-        c1 BIGINT COMMENT 'tag:1',
-        c2 BIGINT COMMENT 'tag:2',
-        PRIMARY KEY (pk)
-    )" ""
-    run dolt ls
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ "No tables in working set" ]] || false
-
-    # create table with autocommit on and verify table creation
-    server_query repo1 1 dolt "" "CREATE TABLE one_pk (
-        pk BIGINT NOT NULL COMMENT 'tag:0',
-        c1 BIGINT COMMENT 'tag:1',
-        c2 BIGINT COMMENT 'tag:2',
-        PRIMARY KEY (pk)
-    )" ""
-    run dolt ls
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ "one_pk" ]] || false
-}
-
-@test "sql-server: read-only flag prevents modification" {
-    skiponwindows "Missing dependencies"
-
-    cd repo1
-
-    DEFAULT_DB="$1"
-    let PORT="$$ % (65536-1024) + 1024"
-    echo "
-  read_only: true" > server.yaml
-    start_sql_server_with_config repo1 server.yaml
-
-    # No tables at the start
-    run dolt ls
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ "No tables in working set" ]] || false
-
-    # attempt to create table (autocommit on), expect either some exception
-    server_query repo1 1 dolt "" "CREATE TABLE i_should_not_exist (
-            c0 INT
-        )" "" "database server is set to read only mode"
-
-    # Expect that there are still no tables
-    run dolt ls
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ "No tables in working set" ]] || false
-}
-
-@test "sql-server: read-only flag still allows select" {
-    skiponwindows "Missing dependencies"
-
-    cd repo1
-    dolt sql -q "create table t(c0 int)"
-    dolt sql -q "insert into t values (1)"
-
-    DEFAULT_DB="$1"
-    let PORT="$$ % (65536-1024) + 1024"
-    echo "
-  read_only: true" > server.yaml
-    start_sql_server_with_config repo1 server.yaml
-
-    # make a select query
-    server_query repo1 1 dolt "" "select * from t" "c0\n1"
-}
-
-@test "sql-server: read-only flag prevents dolt_commit" {
-    skiponwindows "Missing dependencies"
-
-    cd repo1
-
-    DEFAULT_DB="$1"
-    let PORT="$$ % (65536-1024) + 1024"
-    echo "
-  read_only: true" > server.yaml
-    start_sql_server_with_config repo1 server.yaml
-
-    # make a dolt_commit query
-    skip "read-only flag does not prevent dolt_commit"
-    server_query repo1 1 dolt "" "call dolt_commit('--allow-empty', '-m', 'msg')" "" "database server is set to read only mode: user does not have permission: write"
-}
-
-@test "sql-server: read-only flag prevents dolt_reset" {
-    skiponwindows "Missing dependencies"
-
-    cd repo1
-    run dolt commit --allow-empty -m 'empty test commit'
-
-    DEFAULT_DB="$1"
-    let PORT="$$ % (65536-1024) + 1024"
-    echo "
-  read_only: true" > server.yaml
-    start_sql_server_with_config repo1 server.yaml
-
-    # try to execute dolt_reset
-    skip "read-only flag does not prevent dolt_reset"
-    server_query repo1 1 dolt "" "call dolt_reset('--hard', 'HEAD~1')" "" "database server is set to read only mode: user does not have permission: write"
 }
 
 
@@ -359,47 +234,6 @@ SQL
     run dolt log
     [ $status -eq 0 ]
     [[ "$output" =~ "Commit1" ]] || false
-}
-
-@test "sql-server: test basic querying via dolt sql-server" {
-    skiponwindows "Missing dependencies"
-
-    cd repo1
-    start_sql_server repo1
-
-    server_query repo1 1 dolt "" "SHOW tables" ""
-    server_query repo1 1 dolt "" "CREATE TABLE one_pk (
-        pk BIGINT NOT NULL COMMENT 'tag:0',
-        c1 BIGINT COMMENT 'tag:1',
-        c2 BIGINT COMMENT 'tag:2',
-        PRIMARY KEY (pk)
-    )" ""
-    server_query repo1 1 dolt "" "SHOW tables" "Tables_in_repo1\none_pk"
-    server_query repo1 1 dolt "" "INSERT INTO one_pk (pk) VALUES (0)"
-    server_query repo1 1 dolt "" "SELECT * FROM one_pk ORDER BY pk" "pk,c1,c2\n0,None,None"
-    server_query repo1 1 dolt "" "INSERT INTO one_pk (pk,c1) VALUES (1,1)"
-    server_query repo1 1 dolt "" "INSERT INTO one_pk (pk,c1,c2) VALUES (2,2,2),(3,3,3)"
-    server_query repo1 1 dolt "" "SELECT * FROM one_pk ORDER by pk" "pk,c1,c2\n0,None,None\n1,1,None\n2,2,2\n3,3,3"
-    server_query repo1 1 dolt "" "UPDATE one_pk SET c2=c1 WHERE c2 is NULL and c1 IS NOT NULL"
-}
-
-@test "sql-server: test multiple queries on the same connection" {
-    skiponwindows "Missing dependencies"
-
-    cd repo1
-    start_sql_server repo1
-
-    server_query repo1 1 dolt "" "CREATE TABLE one_pk (
-        pk BIGINT NOT NULL COMMENT 'tag:0',
-        c1 BIGINT COMMENT 'tag:1',
-        c2 BIGINT COMMENT 'tag:2',
-        PRIMARY KEY (pk)
-    );
-    INSERT INTO one_pk (pk) VALUES (0);
-    INSERT INTO one_pk (pk,c1) VALUES (1,1);
-    INSERT INTO one_pk (pk,c1,c2) VALUES (2,2,2),(3,3,3);"
-
-    server_query repo1 1 dolt "" "SELECT * FROM one_pk ORDER by pk" "pk,c1,c2\n0,None,None\n1,1,None\n2,2,2\n3,3,3"
 }
 
 @test "sql-server: test reset_hard" {
@@ -553,24 +387,6 @@ SQL
     server_query repo1 1 dolt "" "SELECT * FROM repo2.r2_one_pk" "pk,c3,c4\n1,1,1\n2,2,2\n3,3,3"
 }
 
-@test "sql-server: test CREATE and DROP database via sql-server" {
-    skiponwindows "Missing dependencies"
-
-    cd repo1
-    start_sql_server repo1
-
-    server_query repo1 1 dolt "" "
-    CREATE DATABASE test;
-    USE test;
-    CREATE TABLE pk(pk int primary key);
-    INSERT INTO pk (pk) VALUES (0);
-    "
-
-    server_query repo1 1 dolt "" "SELECT * FROM test.pk ORDER BY pk" "pk\n0"
-    server_query repo1 1 dolt "" "DROP DATABASE test" ""
-    server_query repo1 1 dolt "" "SHOW DATABASES" "Database\ninformation_schema\nmysql\nrepo1"
-}
-
 @test "sql-server: DOLT_ADD, DOLT_COMMIT, DOLT_CHECKOUT, DOLT_MERGE work together in server mode" {
     skiponwindows "Missing dependencies"
 
@@ -648,21 +464,6 @@ SQL
      server_query repo1 1 dolt "" "SELECT COUNT(*) FROM dolt_log" "COUNT(*)\n3"
 }
 
-@test "sql-server: LOAD DATA LOCAL INFILE works" {
-     skiponwindows "Missing dependencies"
-
-     cd repo1
-     start_sql_server repo1
-
-     server_query repo1 1 dolt "" "
-     CREATE TABLE test(pk int primary key, c1 int, c2 int, c3 int, c4 int, c5 int);
-     SET GLOBAL local_infile = 1;
-     LOAD DATA LOCAL INFILE '$BATS_TEST_DIRNAME/helper/1pk5col-ints.csv' INTO TABLE test CHARACTER SET UTF8MB4 FIELDS TERMINATED BY ',' ESCAPED BY '' LINES TERMINATED BY '\n' IGNORE 1 LINES;
-     "
-
-     server_query repo1 1 dolt "" "SELECT * FROM test" "pk,c1,c2,c3,c4,c5\n0,1,2,3,4,5\n1,1,2,3,4,5"
-}
-
 @test "sql-server: Run queries on database without ever selecting it" {
      skiponwindows "Missing dependencies"
 
@@ -732,25 +533,6 @@ SQL
      run dolt sql --user=dolt -q "show tables"
      [ "$status" -eq 0 ]
      [[ "$output" =~ "test" ]] || false
-}
-
-@test "sql-server: JSON queries" {
-    skip_nbf_dolt
-    cd repo1
-    start_sql_server repo1
-
-    # create table with autocommit on and verify table creation
-    server_query repo1 1 dolt "" "CREATE TABLE js_test (
-        pk int NOT NULL,
-        js json,
-        PRIMARY KEY (pk)
-    )" ""
-    run dolt ls
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ "js_test" ]] || false
-
-    server_query repo1 1 dolt "" "INSERT INTO js_test VALUES (1, '{\"a\":1}');"
-    server_query repo1 1 dolt "" "SELECT * FROM js_test;" "pk,js\n1,{\"a\": 1}"
 }
 
 @test "sql-server: manual commit table can be dropped (validates superschema structure)" {
@@ -858,27 +640,6 @@ SQL
     server_query "repo1/$hash" 1 dolt "" "select count(*) from test" "count(*)\n3"
 }
 
-@test "sql-server: select a branch with the USE syntax" {
-    skiponwindows "Missing dependencies"
-
-    cd repo1
-    dolt checkout -b "feature-branch"
-    dolt checkout main
-    start_sql_server repo1
-
-    server_query repo1 1 dolt "" '
-    USE `repo1/feature-branch`;
-    CREATE TABLE test (
-        pk int,
-        c1 int,
-        PRIMARY KEY (pk)
-    )' ""
-
-    server_query repo1 1 dolt "" "SHOW tables" "" # no tables on main
-
-    server_query "repo1/feature-branch" 1 dolt "" "SHOW Tables" "Tables_in_repo1/feature-branch\ntest"
-}
-
 @test "sql-server: SET GLOBAL default branch as ref" {
     skiponwindows "Missing dependencies"
 
@@ -919,97 +680,11 @@ SQL
     server_query repo1 1 dolt "" "SHOW tables" "Tables_in_repo1\nt"
 }
 
-@test "sql-server: require_secure_transport no key or cert" {
-    skiponwindows "Missing dependencies"
-    cd repo1
-    let PORT="$$ % (65536-1024) + 1024"
-    cat >config.yml <<EOF
-listener:
-  require_secure_transport: true
-EOF
-    run dolt sql-server --host 0.0.0.0 --port=$PORT --user dolt --config ./config.yml
-    [ "$status" -eq 1 ]
-}
-
-@test "sql-server: tls_key non-existant" {
-    skiponwindows "Missing dependencies"
-    cd repo1
-    cp "$BATS_TEST_DIRNAME"/../../go/cmd/dolt/commands/sqlserver/testdata/chain_key.pem .
-    cp "$BATS_TEST_DIRNAME"/../../go/cmd/dolt/commands/sqlserver/testdata/chain_cert.pem .
-    let PORT="$$ % (65536-1024) + 1024"
-    cat >config.yml <<EOF
-listener:
-  tls_cert: doesnotexist_cert.pem
-  tls_key: chain_key.pem
-EOF
-    run dolt sql-server --host 0.0.0.0 --port=$PORT --user dolt --config ./config.yml
-    [ "$status" -eq 1 ]
-}
-
-@test "sql-server: tls_cert non-existant" {
-    skiponwindows "Missing dependencies"
-    cd repo1
-    cp "$BATS_TEST_DIRNAME"/../../go/cmd/dolt/commands/sqlserver/testdata/chain_key.pem .
-    cp "$BATS_TEST_DIRNAME"/../../go/cmd/dolt/commands/sqlserver/testdata/chain_cert.pem .
-    let PORT="$$ % (65536-1024) + 1024"
-    cat >config.yml <<EOF
-listener:
-  tls_cert: chain_cert.pem
-  tls_key: doesnotexist.pem
-EOF
-    run dolt sql-server --host 0.0.0.0 --port=$PORT --user dolt --config ./config.yml
-    [ "$status" -eq 1 ]
-}
-
-@test "sql-server: tls only server" {
-    skiponwindows "Missing dependencies"
-    cd repo1
-    cp "$BATS_TEST_DIRNAME"/../../go/cmd/dolt/commands/sqlserver/testdata/chain_key.pem .
-    cp "$BATS_TEST_DIRNAME"/../../go/cmd/dolt/commands/sqlserver/testdata/chain_cert.pem .
-    let PORT="$$ % (65536-1024) + 1024"
-    cat >config.yml <<EOF
-log_level: debug
-user:
-  name: dolt
-listener:
-  host: "0.0.0.0"
-  port: $PORT
-  tls_cert: chain_cert.pem
-  tls_key: chain_key.pem
-  require_secure_transport: true
-EOF
-    dolt sql-server --config ./config.yml &
-    SERVER_PID=$!
-    # We do things manually here because we need TLS support.
-    python3 -c '
-import mysql.connector
-import sys
-import time
-i=0
-while True:
-  try:
-    with mysql.connector.connect(host="127.0.0.1", user="dolt", port='"$PORT"', database="repo1", connection_timeout=1) as c:
-      cursor = c.cursor()
-      cursor.execute("show tables")
-      for (t) in cursor:
-        print(t)
-      sys.exit(0)
-  except mysql.connector.Error as err:
-    if err.errno != 2003:
-      raise err
-    else:
-      i += 1
-      time.sleep(1)
-      if i == 10:
-        raise err
-'
-}
-
 @test "sql-server: disable_client_multi_statements makes create trigger work" {
     skiponwindows "Missing dependencies"
     cd repo1
     dolt sql -q 'create table test (id int primary key)'
-    let PORT="$$ % (65536-1024) + 1024"
+    PORT=$( definePORT )
     cat >config.yml <<EOF
 log_level: debug
 behavior:
@@ -1056,7 +731,7 @@ END""")
     skiponwindows "Missing dependencies"
     cd repo1
     dolt sql -q 'create table test (id int primary key)'
-    let PORT="$$ % (65536-1024) + 1024"
+    PORT=$( definePORT )
     cat >config.yml <<EOF
 log_level: debug
 user:
@@ -1095,23 +770,6 @@ END""")
       if i == 10:
         raise err
 '
-}
-
-@test "sql-server: auto increment for a table should reset between drops" {
-    skiponwindows "Missing dependencies"
-
-    cd repo1
-    start_sql_server repo1
-
-    server_query repo1 1 dolt "" "CREATE TABLE t1(pk int auto_increment primary key, val int)" ""
-    server_query repo1 1 dolt "" "INSERT INTO t1 VALUES (0, 1),(0, 2)"
-    server_query repo1 1 dolt "" "SELECT * FROM t1" "pk,val\n1,1\n2,2"
-
-    # drop the table and try again
-    server_query repo1 1 dolt "" "drop table t1;"
-    server_query repo1 1 dolt "" "CREATE TABLE t1(pk int auto_increment primary key, val int)" ""
-    server_query repo1 1 dolt "" "INSERT INTO t1 VALUES (0, 1),(0, 2)"
-    server_query repo1 1 dolt "" "SELECT * FROM t1" "pk,val\n1,1\n2,2"
 }
 
 @test "sql-server: auto increment is globally distinct across branches and connections" {
@@ -1498,7 +1156,7 @@ databases:
 @test "sql-server: sql-server locks database" {
     cd repo1
     start_sql_server
-    let PORT="$$ % (65536-1024) + 1024"
+    PORT=$( definePORT )
     run dolt sql-server -P $PORT
     [ "$status" -eq 1 ]
 }
@@ -1506,7 +1164,7 @@ databases:
 @test "sql-server: multi dir sql-server locks out childen" {
     start_sql_server
     cd repo2
-    let PORT="$$ % (65536-1024) + 1024"
+    PORT=$( definePORT )
     run dolt sql-server -P $PORT
     [ "$status" -eq 1 ]
 }
@@ -1515,7 +1173,7 @@ databases:
     cd repo2
     start_sql_server
     cd ..
-    let PORT="$$ % (65536-1024) + 1024"
+    PORT=$( definePORT )
     run dolt sql-server -P $PORT
     [ "$status" -eq 1 ]
 }
@@ -1525,7 +1183,7 @@ databases:
     start_sql_server
     server_query repo1 1 dolt "" "create database newdb" ""
     cd newdb
-    let PORT="$$ % (65536-1024) + 1024"
+    PORT=$( definePORT )
     run dolt sql-server -P $PORT
     [ "$status" -eq 1 ]
 }
@@ -1542,11 +1200,35 @@ databases:
     [[ "$output" =~ "database is locked to writes" ]] || false
 }
 
+@test "sql-server: start server without socket flag should set default socket path" {
+    skiponwindows "unix socket is not available on Windows"
+    cd repo2
+    DEFAULT_DB="repo2"
+    PORT=$( definePORT )
+
+    dolt sql-server --port $PORT --user dolt >> log.txt 2>&1 &
+    SERVER_PID=$!
+    wait_for_connection $PORT 5000
+
+    server_query repo2 1 dolt "" "select 1 dolt ""as col1" "col1\n1"
+    run grep '\"/tmp/mysql.sock\"' log.txt
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 1 ]
+
+    run dolt sql-client --user=dolt <<< "exit;"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "# Welcome to the Dolt MySQL client." ]] || false
+
+    run dolt sql-client --host=0.0.0.0 --port=$PORT --user=dolt <<< "exit;"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "# Welcome to the Dolt MySQL client." ]] || false
+}
+
 @test "sql-server: start server with socket option undefined should set default socket path" {
     skiponwindows "unix socket is not available on Windows"
     cd repo2
     DEFAULT_DB="repo2"
-    let PORT="$$ % (65536-1024) + 1024"
+    PORT=$( definePORT )
 
     dolt sql-server --port $PORT --user dolt --socket > log.txt 2>&1 &
     SERVER_PID=$!
@@ -1567,7 +1249,7 @@ databases:
     run pwd
     REPO_NAME=$output
 
-    let PORT="$$ % (65536-1024) + 1024"
+    PORT=$( definePORT )
     dolt sql-server --port=$PORT --socket="$REPO_NAME/mysql.sock" --user dolt > log.txt 2>&1 &
     SERVER_PID=$!
     run wait_for_connection $PORT 5000
@@ -1582,7 +1264,7 @@ databases:
     skiponwindows "unix socket is not available on Windows"
     cd repo2
     DEFAULT_DB="repo2"
-    let PORT="$$ % (65536-1024) + 1024"
+    PORT=$( definePORT )
 
     echo "
 log_level: debug
@@ -1700,7 +1382,7 @@ s.close()
     run dolt init --new-format
     [ $status -eq 0 ]
 
-    let PORT="$$ % (65536-1024) + 1024"
+    PORT=$( definePORT )
     dolt sql-server --host 0.0.0.0 --port=$PORT --user dolt &
     SERVER_PID=$! # will get killed by teardown_common
     sleep 5 # not using python wait so this works on windows
@@ -1738,4 +1420,75 @@ s.close()
 
     run grep "failed to access 'mydb2' database: can no longer find .dolt dir on disk" server_log.txt
     [ "${#lines[@]}" -eq 1 ]
+
+    # this tests fails sometimes as the server is stopped from the above error
+    # but stop_sql_server in teardown tries to kill process that is not running anymore,
+    # so start the server again, and it will be stopped in teardown
+    start_sql_server
+}
+
+@test "sql-server: dropping database that the server is running in should drop only the db itself not its nested dbs" {
+    skiponwindows "Missing dependencies"
+
+    mkdir mydb
+    cd mydb
+    dolt init
+
+    start_sql_server >> server_log.txt 2>&1
+
+    # 'doltdb' will be nested database inside 'mydb'
+    server_query "" 1 dolt "" "CREATE DATABASE doltdb"
+    run dolt sql -q "SHOW DATABASES"
+    [[ "$output" =~ "mydb" ]] || false
+    [[ "$output" =~ "doltdb" ]] || false
+
+    server_query "" 1 dolt "" "DROP DATABASE mydb"
+    run grep "database not found: mydb" server_log.txt
+    [ "${#lines[@]}" -eq 0 ]
+
+    [ ! -d .dolt ]
+
+    # nested databases inside dropped database should still exist
+    run dolt sql -q "SHOW DATABASES"
+    [[ "$output" =~ "doltdb" ]] || false
+    [[ ! "$output" =~ "mydb" ]] || false
+}
+
+@test "sql-server: dropping database currently selected and that the server is running in" {
+    skiponwindows "Missing dependencies"
+
+    mkdir mydb
+    cd mydb
+    dolt init
+
+    run dolt sql -q "SHOW DATABASES"
+    [[ "$output" =~ "mydb" ]] || false
+
+    start_sql_server >> server_log.txt 2>&1
+    server_query "mydb" 1 dolt "" "DROP DATABASE mydb;"
+
+    run grep "database not found: mydb" server_log.txt
+    [ "${#lines[@]}" -eq 0 ]
+
+    [ ! -d .dolt ]
+
+    run dolt sql -q "SHOW DATABASES"
+    [[ ! "$output" =~ "mydb" ]] || false
+}
+
+@test "sql-server: dropping database with '-' in it" {
+    skiponwindows "Missing dependencies"
+
+    mkdir my-db
+    cd my-db
+    dolt init
+    cd ..
+
+    start_sql_server >> server_log.txt 2>&1
+    server_query "" 1 dolt "" "DROP DATABASE my_db;"
+
+    run grep "database not found: my_db" server_log.txt
+    [ "${#lines[@]}" -eq 0 ]
+
+    [ ! -d my-db ]
 }

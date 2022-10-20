@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
+	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -29,7 +29,6 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/sqlfmt"
-	"github.com/dolthub/dolt/go/store/types"
 )
 
 type StringBuilderCloser struct {
@@ -41,9 +40,7 @@ func (*StringBuilderCloser) Close() error {
 }
 
 func TestEndToEnd(t *testing.T) {
-	id := uuid.MustParse("00000000-0000-0000-0000-000000000000")
 	tableName := "people"
-
 	dropCreateStatement := sqlfmt.DropTableIfExistsStmt(tableName) + "\n" +
 		"CREATE TABLE `people` (\n" +
 		"  `id` varchar(16383) NOT NULL,\n" +
@@ -58,7 +55,7 @@ func TestEndToEnd(t *testing.T) {
 
 	type test struct {
 		name           string
-		rows           []row.Row
+		rows           []sql.Row
 		sch            schema.Schema
 		expectedOutput string
 	}
@@ -66,9 +63,10 @@ func TestEndToEnd(t *testing.T) {
 	tests := []test{
 		{
 			name: "two rows",
-			rows: rs(
-				dtestutils.NewTypedRow(id, "some guy", 100, false, strPointer("normie")),
-				dtestutils.NewTypedRow(id, "guy personson", 0, true, strPointer("officially a person"))),
+			rows: []sql.Row{
+				{"00000000-0000-0000-0000-000000000000", "some guy", 100, 0, "normie"},
+				{"00000000-0000-0000-0000-000000000000", "guy personson", 0, 1, "officially a person"},
+			},
 			sch: dtestutils.TypedSchema,
 			expectedOutput: dropCreateStatement + "\n" +
 				"INSERT INTO `people` (`id`,`name`,`age`,`is_married`,`title`) " +
@@ -90,16 +88,17 @@ func TestEndToEnd(t *testing.T) {
 			root, err := dEnv.WorkingRoot(ctx)
 			require.NoError(t, err)
 
-			empty, err := types.NewMap(ctx, root.VRW())
+			empty, err := durable.NewEmptyIndex(ctx, root.VRW(), root.NodeStore(), tt.sch)
 			require.NoError(t, err)
 
 			indexes, err := durable.NewIndexSet(ctx, root.VRW(), root.NodeStore())
 			require.NoError(t, err)
-			indexes, err = indexes.PutNomsIndex(ctx, dtestutils.IndexName, empty)
+			indexes, err = indexes.PutIndex(ctx, dtestutils.IndexName, empty)
 			require.NoError(t, err)
 
-			tbl, err := doltdb.NewNomsTable(ctx, root.VRW(), root.NodeStore(), tt.sch, empty, indexes, nil)
+			tbl, err := doltdb.NewTable(ctx, root.VRW(), root.NodeStore(), tt.sch, empty, indexes, nil)
 			require.NoError(t, err)
+
 			root, err = root.PutTable(ctx, tableName, tbl)
 			require.NoError(t, err)
 
@@ -112,7 +111,7 @@ func TestEndToEnd(t *testing.T) {
 			}
 
 			for _, r := range tt.rows {
-				assert.NoError(t, w.WriteRow(ctx, r))
+				assert.NoError(t, w.WriteSqlRow(ctx, r))
 			}
 
 			assert.NoError(t, w.Close(ctx))

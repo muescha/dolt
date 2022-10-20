@@ -141,11 +141,14 @@ type YAMLConfig struct {
 	RemotesapiConfig  RemotesapiYAMLConfig  `yaml:"remotesapi"`
 	ClusterCfg        *ClusterYAMLConfig    `yaml:"cluster"`
 	PrivilegeFile     *string               `yaml:"privilege_file"`
+	BranchControlFile *string               `yaml:"branch_control_file"`
 	Vars              []UserSessionVars     `yaml:"user_session_vars"`
 	Jwks              []engine.JwksConfig   `yaml:"jwks"`
+	GoldenMysqlConn   *string               `yaml:"golden_mysql_conn"`
 }
 
 var _ ServerConfig = YAMLConfig{}
+var _ validatingServerConfig = YAMLConfig{}
 
 func NewYamlConfig(configFileData []byte) (YAMLConfig, error) {
 	var cfg YAMLConfig
@@ -358,6 +361,14 @@ func (cfg YAMLConfig) PrivilegeFilePath() string {
 	return filepath.Join(cfg.CfgDir(), defaultPrivilegeFilePath)
 }
 
+// BranchControlFilePath returns the path to the file which contains the branch control permissions.
+func (cfg YAMLConfig) BranchControlFilePath() string {
+	if cfg.BranchControlFile != nil {
+		return *cfg.BranchControlFile
+	}
+	return filepath.Join(cfg.CfgDir(), defaultBranchControlFilePath)
+}
+
 // UserVars is an array containing user specific session variables
 func (cfg YAMLConfig) UserVars() []UserSessionVars {
 	if cfg.Vars != nil {
@@ -449,6 +460,13 @@ func (cfg YAMLConfig) Socket() string {
 		return defaultUnixSocketFilePath
 	}
 	return *cfg.ListenerConfig.Socket
+}
+
+func (cfg YAMLConfig) goldenMysqlConnectionString() (s string) {
+	if cfg.GoldenMysqlConn != nil {
+		s = *cfg.GoldenMysqlConn
+	}
+	return
 }
 
 func (cfg YAMLConfig) ClusterConfig() cluster.Config {

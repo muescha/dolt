@@ -46,7 +46,7 @@ var skipPrepared bool
 // SkipPreparedsCount is used by the "ci-check-repo CI workflow
 // as a reminder to consider prepareds when adding a new
 // enginetest suite.
-const SkipPreparedsCount = 79
+const SkipPreparedsCount = 80
 
 const skipPreparedFlag = "DOLT_SKIP_PREPARED_ENGINETESTS"
 
@@ -258,6 +258,11 @@ func TestQueryPlans(t *testing.T) {
 	enginetest.TestQueryPlans(t, harness, queries.PlanTests)
 }
 
+func TestIntegrationQueryPlans(t *testing.T) {
+	harness := newDoltHarness(t).WithParallelism(2)
+	enginetest.TestIntegrationPlans(t, harness)
+}
+
 func TestDoltDiffQueryPlans(t *testing.T) {
 	harness := newDoltHarness(t).WithParallelism(2) // want Exchange nodes
 	harness.Setup(setup.SimpleSetup...)
@@ -442,12 +447,11 @@ func TestJSONTableScripts(t *testing.T) {
 }
 
 func TestUserPrivileges(t *testing.T) {
-	t.Skip("Need to add more collations")
 	enginetest.TestUserPrivileges(t, newDoltHarness(t))
 }
 
 func TestUserAuthentication(t *testing.T) {
-	t.Skip("Need to add more collations")
+	t.Skip("Unexpected panic, need to fix")
 	enginetest.TestUserAuthentication(t, newDoltHarness(t))
 }
 
@@ -830,6 +834,14 @@ func TestDoltDdlScripts(t *testing.T) {
 		require.NoError(t, err)
 		enginetest.TestScriptWithEngine(t, e, harness, script)
 	}
+	if !types.IsFormat_DOLT(types.Format_Default) {
+		t.Skip("not fixing unique index on keyless tables for old format")
+	}
+	for _, script := range AddIndexScripts {
+		e, err := harness.NewEngine(t)
+		require.NoError(t, err)
+		enginetest.TestScriptWithEngine(t, e, harness, script)
+	}
 }
 
 func TestBrokenDdlScripts(t *testing.T) {
@@ -1063,7 +1075,7 @@ func TestBrokenSystemTableQueries(t *testing.T) {
 }
 
 func TestHistorySystemTable(t *testing.T) {
-	harness := newDoltHarness(t)
+	harness := newDoltHarness(t).WithParallelism(2)
 	harness.Setup(setup.MydbData)
 	for _, test := range HistorySystemTableScriptTests {
 		harness.engine = nil
@@ -1074,7 +1086,7 @@ func TestHistorySystemTable(t *testing.T) {
 }
 
 func TestHistorySystemTablePrepared(t *testing.T) {
-	harness := newDoltHarness(t)
+	harness := newDoltHarness(t).WithParallelism(2)
 	harness.Setup(setup.MydbData)
 	for _, test := range HistorySystemTableScriptTests {
 		harness.engine = nil
@@ -1127,6 +1139,50 @@ func TestDiffTableFunctionPrepared(t *testing.T) {
 	harness := newDoltHarness(t)
 	harness.Setup(setup.MydbData)
 	for _, test := range DiffTableFunctionScriptTests {
+		harness.engine = nil
+		t.Run(test.Name, func(t *testing.T) {
+			enginetest.TestScriptPrepared(t, harness, test)
+		})
+	}
+}
+
+func TestDiffSummaryTableFunction(t *testing.T) {
+	harness := newDoltHarness(t)
+	harness.Setup(setup.MydbData)
+	for _, test := range DiffSummaryTableFunctionScriptTests {
+		harness.engine = nil
+		t.Run(test.Name, func(t *testing.T) {
+			enginetest.TestScript(t, harness, test)
+		})
+	}
+}
+
+func TestDiffSummaryTableFunctionPrepared(t *testing.T) {
+	harness := newDoltHarness(t)
+	harness.Setup(setup.MydbData)
+	for _, test := range DiffSummaryTableFunctionScriptTests {
+		harness.engine = nil
+		t.Run(test.Name, func(t *testing.T) {
+			enginetest.TestScriptPrepared(t, harness, test)
+		})
+	}
+}
+
+func TestLogTableFunction(t *testing.T) {
+	harness := newDoltHarness(t)
+	harness.Setup(setup.MydbData)
+	for _, test := range LogTableFunctionScriptTests {
+		harness.engine = nil
+		t.Run(test.Name, func(t *testing.T) {
+			enginetest.TestScript(t, harness, test)
+		})
+	}
+}
+
+func TestLogTableFunctionPrepared(t *testing.T) {
+	harness := newDoltHarness(t)
+	harness.Setup(setup.MydbData)
+	for _, test := range LogTableFunctionScriptTests {
 		harness.engine = nil
 		t.Run(test.Name, func(t *testing.T) {
 			enginetest.TestScriptPrepared(t, harness, test)

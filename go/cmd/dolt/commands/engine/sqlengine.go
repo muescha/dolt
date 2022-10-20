@@ -29,6 +29,7 @@ import (
 	"github.com/dolthub/vitess/go/vt/sqlparser"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
+	"github.com/dolthub/dolt/go/libraries/doltcore/branch_control"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
@@ -49,18 +50,19 @@ type SqlEngine struct {
 }
 
 type SqlEngineConfig struct {
-	InitialDb         string
-	IsReadOnly        bool
-	IsServerLocked    bool
-	DoltCfgDirPath    string
-	PrivFilePath      string
-	ServerUser        string
-	ServerPass        string
-	ServerHost        string
-	Autocommit        bool
-	Bulk              bool
-	JwksConfig        []JwksConfig
-	ClusterController *cluster.Controller
+	InitialDb          string
+	IsReadOnly         bool
+	IsServerLocked     bool
+	DoltCfgDirPath     string
+	PrivFilePath       string
+	BranchCtrlFilePath string
+	ServerUser         string
+	ServerPass         string
+	ServerHost         string
+	Autocommit         bool
+	Bulk               bool
+	JwksConfig         []JwksConfig
+	ClusterController  *cluster.Controller
 }
 
 // NewSqlEngine returns a SqlEngine
@@ -88,9 +90,22 @@ func NewSqlEngine(
 		return nil, err
 	}
 
+	config.ClusterController.ManageSystemVariables(sql.SystemVariables)
+
+	err = config.ClusterController.ApplyStandbyReplicationConfig(ctx, bThreads, mrEnv, dbs...)
+	if err != nil {
+		return nil, err
+	}
+
 	infoDB := information_schema.NewInformationSchemaDatabase()
 	all := append(dsqleDBsAsSqlDBs(dbs), infoDB)
 	locations = append(locations, nil)
+
+	clusterDB := config.ClusterController.ClusterDatabase()
+	if clusterDB != nil {
+		all = append(all, clusterDB)
+		locations = append(locations, nil)
+	}
 
 	b := env.GetDefaultInitBranch(mrEnv.Config())
 	pro, err := dsqle.NewDoltDatabaseProviderWithDatabases(b, mrEnv.FileSystem(), all, locations)
@@ -99,15 +114,19 @@ func NewSqlEngine(
 	}
 	pro = pro.WithRemoteDialer(mrEnv.RemoteDialProvider())
 
-	if config.ClusterController != nil {
-		config.ClusterController.ManageSystemVariables(sql.SystemVariables)
-		config.ClusterController.RegisterStoredProcedures(pro)
-	}
+	config.ClusterController.RegisterStoredProcedures(pro)
+	pro.InitDatabaseHook = cluster.NewInitDatabaseHook(config.ClusterController, bThreads, pro.InitDatabaseHook)
+	config.ClusterController.ManageDatabaseProvider(pro)
 
 	// Load in privileges from file, if it exists
 	persister := mysql_file_handler.NewPersister(config.PrivFilePath, config.DoltCfgDirPath)
 	data, err := persister.LoadData()
 	if err != nil {
+		return nil, err
+	}
+
+	// Load the branch control permissions, if they exist
+	if err = branch_control.LoadData(sql.NewEmptyContext(), config.BranchCtrlFilePath, config.DoltCfgDirPath); err != nil {
 		return nil, err
 	}
 

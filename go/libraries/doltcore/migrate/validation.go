@@ -238,6 +238,10 @@ func nomsKindsFromQueryTypes(qt query.Type) []types.NomsKind {
 			types.PointKind,
 			types.LineStringKind,
 			types.PolygonKind,
+			types.MultiPointKind,
+			types.MultiLineStringKind,
+			types.MultiPolygonKind,
+			types.GeometryCollectionKind,
 		}
 
 	case query.Type_JSON:

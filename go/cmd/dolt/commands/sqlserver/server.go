@@ -124,7 +124,7 @@ func Serve(
 		}
 	}
 
-	clusterController, err := cluster.NewController(serverConfig.ClusterConfig(), mrEnv.Config())
+	clusterController, err := cluster.NewController(lgr, serverConfig.ClusterConfig(), mrEnv.Config())
 	if err != nil {
 		return err, nil
 	}
@@ -182,12 +182,23 @@ func Serve(
 	}
 	defer listener.Close()
 
-	mySQLServer, startError = server.NewServer(
-		serverConf,
-		sqlEngine.GetUnderlyingEngine(),
-		newSessionBuilder(sqlEngine, serverConfig),
-		listener,
-	)
+	v, ok := serverConfig.(validatingServerConfig)
+	if ok && v.goldenMysqlConnectionString() != "" {
+		mySQLServer, startError = server.NewValidatingServer(
+			serverConf,
+			sqlEngine.GetUnderlyingEngine(),
+			newSessionBuilder(sqlEngine, serverConfig),
+			listener,
+			v.goldenMysqlConnectionString(),
+		)
+	} else {
+		mySQLServer, startError = server.NewServer(
+			serverConf,
+			sqlEngine.GetUnderlyingEngine(),
+			newSessionBuilder(sqlEngine, serverConfig),
+			listener,
+		)
+	}
 
 	if startError != nil {
 		cli.PrintErr(startError)
@@ -214,7 +225,13 @@ func Serve(
 	var remoteSrv *remotesrv.Server
 	if serverConfig.RemotesapiPort() != nil {
 		if remoteSrvSqlCtx, err := sqlEngine.NewContext(context.Background()); err == nil {
-			remoteSrv = sqle.NewRemoteSrvServer(logrus.NewEntry(lgr), remoteSrvSqlCtx, *serverConfig.RemotesapiPort())
+			args := sqle.RemoteSrvServerArgs(remoteSrvSqlCtx, remotesrv.ServerArgs{
+				Logger:   logrus.NewEntry(lgr),
+				ReadOnly: true,
+				HttpPort: *serverConfig.RemotesapiPort(),
+				GrpcPort: *serverConfig.RemotesapiPort(),
+			})
+			remoteSrv = remotesrv.NewServer(args)
 			listeners, err := remoteSrv.Listeners()
 			if err != nil {
 				lgr.Errorf("error starting remotesapi server listeners on port %d: %v", *serverConfig.RemotesapiPort(), err)
@@ -232,6 +249,37 @@ func Serve(
 		}
 	}
 
+	var clusterRemoteSrv *remotesrv.Server
+	if clusterController != nil {
+		if remoteSrvSqlCtx, err := sqlEngine.NewContext(context.Background()); err == nil {
+			args := clusterController.RemoteSrvServerArgs(remoteSrvSqlCtx, remotesrv.ServerArgs{
+				Logger: logrus.NewEntry(lgr),
+			})
+			clusterRemoteSrv = remotesrv.NewServer(args)
+			listeners, err := clusterRemoteSrv.Listeners()
+			if err != nil {
+				lgr.Errorf("error starting remotesapi server listeners for cluster config on port %d: %v", clusterController.RemoteSrvPort(), err)
+				startError = err
+				return
+			} else {
+				go func() {
+					clusterRemoteSrv.Serve(listeners)
+				}()
+			}
+
+			clusterController.ManageQueryConnections(
+				mySQLServer.SessionManager().Iter,
+				sqlEngine.GetUnderlyingEngine().ProcessList.Kill,
+				mySQLServer.SessionManager().KillConnection,
+			)
+		} else {
+			lgr.Errorf("error creating SQL engine context for remotesapi server: %v", err)
+			startError = err
+			return
+		}
+
+	}
+
 	if ok, f := mrEnv.IsLocked(); ok {
 		startError = env.ErrActiveServerLock.New(f)
 		return
@@ -247,6 +295,9 @@ func Serve(
 		}
 		if remoteSrv != nil {
 			remoteSrv.GracefulStop()
+		}
+		if clusterRemoteSrv != nil {
+			clusterRemoteSrv.GracefulStop()
 		}
 
 		return mySQLServer.Close()
@@ -373,21 +424,32 @@ func handleProtocolAndAddress(serverConfig ServerConfig) (server.Config, error) 
 	}
 	serverConf.Address = hostPort
 
-	// if socket is defined with or without value -> unix
-	if serverConfig.Socket() != "" {
-		if runtime.GOOS == "windows" {
-			return server.Config{}, fmt.Errorf("cannot define unix socket file on Windows")
-		}
-		serverConf.Socket = serverConfig.Socket()
+	sock, useSock, err := checkForUnixSocket(serverConfig)
+	if err != nil {
+		return server.Config{}, err
 	}
-	// TODO : making it an "opt in" feature (just to start) and requiring users to pass in the `--socket` flag
-	//  to turn them on instead of defaulting them on when host and port aren't set or host is set to `localhost`.
-	//} else {
-	//	// if host is undefined or defined as "localhost" -> unix
-	//	if shouldUseUnixSocket(serverConfig) {
-	//		serverConf.Socket = defaultUnixSocketFilePath
-	//	}
-	//}
+	if useSock {
+		serverConf.Socket = sock
+	}
 
 	return serverConf, nil
+}
+
+// checkForUnixSocket evaluates ServerConfig for whether the unix socket is to be used or not.
+// If user defined socket flag or host is 'localhost', it returns the unix socket file location
+// either user-defined or the default if it was not defined.
+func checkForUnixSocket(config ServerConfig) (string, bool, error) {
+	if config.Socket() != "" {
+		if runtime.GOOS == "windows" {
+			return "", false, fmt.Errorf("cannot define unix socket file on Windows")
+		}
+		return config.Socket(), true, nil
+	} else {
+		// if host is undefined or defined as "localhost" -> unix
+		if runtime.GOOS != "windows" && config.Host() == "localhost" {
+			return defaultUnixSocketFilePath, true, nil
+		}
+	}
+
+	return "", false, nil
 }

@@ -15,6 +15,7 @@
 package dsess
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -26,6 +27,7 @@ import (
 	goerrors "gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
+	"github.com/dolthub/dolt/go/libraries/doltcore/branch_control"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions"
@@ -47,6 +49,7 @@ const (
 var ErrWorkingSetChanges = goerrors.NewKind("Cannot switch working set, session state is dirty. " +
 	"Rollback or commit changes before changing working sets.")
 var ErrSessionNotPeristable = errors.New("session is not persistable")
+var ErrCurrentBranchDeleted = errors.New("current branch has been force deleted. run 'USE <database>/<branch>' to checkout a different branch, or reconnect to the server")
 
 // DoltSession is the sql.Session implementation used by dolt. It is accessible through a *sql.Context instance
 type DoltSession struct {
@@ -59,10 +62,15 @@ type DoltSession struct {
 	tempTables  map[string][]sql.Table
 	globalsConf config.ReadWriteConfig
 	mu          *sync.Mutex
+
+	// If non-nil, this will be returned from ValidateSession.
+	// Used by sqle/cluster to put a session into a terminal err state.
+	validateErr error
 }
 
 var _ sql.Session = (*DoltSession)(nil)
 var _ sql.PersistableSession = (*DoltSession)(nil)
+var _ branch_control.Context = (*DoltSession)(nil)
 
 // DefaultSession creates a DoltSession with default values
 func DefaultSession(pro DoltDatabaseProvider) *DoltSession {
@@ -175,6 +183,48 @@ func (d *DoltSession) Flush(ctx *sql.Context, dbName string) error {
 	}
 
 	return d.SetRoot(ctx, dbName, ws.WorkingRoot())
+}
+
+// SetValidateErr sets an error on this session to be returned from every call
+// to ValidateSession. This is effectively a way to disable a session.
+//
+// Used by sql/cluster logic to make sessions on a server which has
+// transitioned roles termainlly error.
+func (d *DoltSession) SetValidateErr(err error) {
+	d.validateErr = err
+}
+
+// ValidateSession validates a working set if there are a valid sessionState with non-nil working set.
+// If there is no sessionState or its current working set not defined, then no need for validation,
+// so no error is returned.
+func (d *DoltSession) ValidateSession(ctx *sql.Context, dbName string) error {
+	if d.validateErr != nil {
+		return d.validateErr
+	}
+	sessionState, ok, err := d.LookupDbState(ctx, dbName)
+	if !ok {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if sessionState.WorkingSet == nil {
+		return nil
+	}
+	wsRef := sessionState.WorkingSet.Ref()
+	_, err = sessionState.dbData.Ddb.ResolveWorkingSet(ctx, wsRef)
+	if err == doltdb.ErrWorkingSetNotFound {
+		_, err = d.newWorkingSetForHead(ctx, wsRef, dbName)
+		// if the current head is not found, the branch was force deleted, so use nil working set.
+		if errors.Is(err, doltdb.ErrBranchNotFound) {
+			return ErrCurrentBranchDeleted
+		} else if err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	return nil
 }
 
 // StartTransaction refreshes the state of this session and starts a new transaction.
@@ -1143,6 +1193,31 @@ func (d *DoltSession) SystemVariablesInConfig() ([]sql.SystemVariable, error) {
 		return nil, err
 	}
 	return sysVars, nil
+}
+
+// GetBranch implements the interface branch_control.Context.
+func (d *DoltSession) GetBranch() (string, error) {
+	branchRef, err := d.CWBHeadRef(sql.NewContext(context.Background(), sql.WithSession(d)), d.Session.GetCurrentDatabase())
+	if err != nil {
+		return "", err
+	}
+	return branchRef.GetPath(), nil
+}
+
+// GetUser implements the interface branch_control.Context.
+func (d *DoltSession) GetUser() string {
+	return d.Session.Client().User
+}
+
+// GetHost implements the interface branch_control.Context.
+func (d *DoltSession) GetHost() string {
+	return d.Session.Client().Address
+}
+
+// GetController implements the interface branch_control.Context.
+func (d *DoltSession) GetController() *branch_control.Controller {
+	//TODO implement me
+	panic("implement me")
 }
 
 // validatePersistedSysVar checks whether a system variable exists and is dynamic
