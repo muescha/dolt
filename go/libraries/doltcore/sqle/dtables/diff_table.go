@@ -335,7 +335,7 @@ func (dp *DiffPartition) isDiffablePartition(ctx *sql.Context) (bool, error) {
 		return false, err
 	}
 
-	return doltdb.ArePrimaryKeySetsDiffable(dp.from.Format(), fromSch, toSch), nil
+	return doltdb.ArePrimaryKeySetsDiffable(fromSch, toSch), nil
 }
 
 type partitionSelectFunc func(*sql.Context, DiffPartition) (bool, error)

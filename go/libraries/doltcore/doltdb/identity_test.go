@@ -507,7 +507,7 @@ func TestArePrimaryKeySetsDiffable(t *testing.T) {
 		From     schema.Schema
 		To       schema.Schema
 		Diffable bool
-		KeyMap   []int
+		KeyMap   val.OrdinalMapping
 	}{
 		{
 			Name: "Basic",
@@ -516,7 +516,7 @@ func TestArePrimaryKeySetsDiffable(t *testing.T) {
 			To: schema.MustSchemaFromCols(schema.NewColCollection(
 				schema.NewColumn("pk", 0, types.IntKind, true))),
 			Diffable: true,
-			KeyMap:   []int{0},
+			KeyMap:   val.OrdinalMapping{0},
 		},
 		{
 			Name: "PK-Column renames",
@@ -525,7 +525,7 @@ func TestArePrimaryKeySetsDiffable(t *testing.T) {
 			To: schema.MustSchemaFromCols(schema.NewColCollection(
 				schema.NewColumn("pk2", 1, types.IntKind, true))),
 			Diffable: true,
-			KeyMap:   []int{0},
+			KeyMap:   val.OrdinalMapping{0},
 		},
 		{
 			Name: "Only pk ordering should matter for diffability",
@@ -535,7 +535,7 @@ func TestArePrimaryKeySetsDiffable(t *testing.T) {
 			To: schema.MustSchemaFromCols(schema.NewColCollection(
 				schema.NewColumn("pk", 1, types.IntKind, true))),
 			Diffable: true,
-			KeyMap:   []int{0},
+			KeyMap:   val.OrdinalMapping{0},
 		},
 		{
 			Name: "Only pk ordering should matter for diffability - inverse",
@@ -545,7 +545,7 @@ func TestArePrimaryKeySetsDiffable(t *testing.T) {
 				schema.NewColumn("col1", 2, types.IntKind, false),
 				schema.NewColumn("pk", 1, types.IntKind, true))),
 			Diffable: true,
-			KeyMap:   []int{0},
+			KeyMap:   val.OrdinalMapping{0},
 		},
 		{
 			Name: "Only pk ordering should matter for diffability - compound",
@@ -557,7 +557,7 @@ func TestArePrimaryKeySetsDiffable(t *testing.T) {
 				schema.NewColumn("pk1", 0, types.IntKind, true),
 				schema.NewColumn("pk2", 2, types.IntKind, true))),
 			Diffable: true,
-			KeyMap:   []int{0, 1},
+			KeyMap:   val.OrdinalMapping{0, 1},
 		},
 		{
 			Name: "Tag mismatches",
@@ -565,23 +565,32 @@ func TestArePrimaryKeySetsDiffable(t *testing.T) {
 				schema.NewColumn("pk", 0, types.IntKind, true))),
 			To: schema.MustSchemaFromCols(schema.NewColCollection(
 				schema.NewColumn("pk", 1, types.IntKind, true))),
-			Diffable: false,
+			Diffable: true,
+			KeyMap:   val.OrdinalMapping{0},
 		},
 		{
 			Name: "PK Ordinal mismatches",
 			From: schema.MustSchemaFromCols(schema.NewColCollection(
 				schema.NewColumn("pk1", 0, types.IntKind, true),
-				schema.NewColumn("pk2", 1, types.IntKind, true))),
+				schema.NewColumn("pk2", 1, types.UintKind, true))),
 			To: schema.MustSchemaFromCols(schema.NewColCollection(
-				schema.NewColumn("pk2", 1, types.IntKind, true),
+				schema.NewColumn("pk2", 1, types.UintKind, true),
 				schema.NewColumn("pk1", 0, types.IntKind, true))),
+			Diffable: false,
+		},
+		{
+			Name: "Int -> String",
+			From: schema.MustSchemaFromCols(schema.NewColCollection(
+				schema.NewColumn("pk", 0, types.IntKind, true))),
+			To: schema.MustSchemaFromCols(schema.NewColCollection(
+				schema.NewColumn("pk", 0, types.StringKind, true))),
 			Diffable: false,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.Name, func(t *testing.T) {
-			d := doltdb.ArePrimaryKeySetsDiffable(types.Format_Default, test.From, test.To)
+			d := doltdb.ArePrimaryKeySetsDiffable(test.From, test.To)
 			require.Equal(t, test.Diffable, d)
 
 			// If they are diffable then we should be able to map their schemas from one to another.
@@ -590,43 +599,6 @@ func TestArePrimaryKeySetsDiffable(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, test.KeyMap, keyMap)
 			}
-		})
-	}
-}
-
-func TestArePrimaryKeySetsDiffableTypeChanges(t *testing.T) {
-	// New format compares underlying SQL types
-	tests := []struct {
-		Name     string
-		From     schema.Schema
-		To       schema.Schema
-		Diffable bool
-		Format   *types.NomsBinFormat
-	}{
-		{
-			Name: "Int -> String (New Format)",
-			From: schema.MustSchemaFromCols(schema.NewColCollection(
-				schema.NewColumn("pk", 0, types.IntKind, true))),
-			To: schema.MustSchemaFromCols(schema.NewColCollection(
-				schema.NewColumn("pk", 0, types.StringKind, true))),
-			Diffable: false,
-			Format:   types.Format_DOLT,
-		},
-		{
-			Name: "Int -> String (Old Format)",
-			From: schema.MustSchemaFromCols(schema.NewColCollection(
-				schema.NewColumn("pk", 0, types.IntKind, true))),
-			To: schema.MustSchemaFromCols(schema.NewColCollection(
-				schema.NewColumn("pk", 0, types.StringKind, true))),
-			Diffable: true,
-			Format:   types.Format_LD_1,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.Name, func(t *testing.T) {
-			d := doltdb.ArePrimaryKeySetsDiffable(test.Format, test.From, test.To)
-			require.Equal(t, test.Diffable, d)
 		})
 	}
 }

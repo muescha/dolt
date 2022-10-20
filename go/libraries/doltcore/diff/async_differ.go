@@ -33,7 +33,7 @@ func NewRowDiffer(ctx context.Context, format *types.NomsBinFormat, fromSch, toS
 	ad := NewAsyncDiffer(buf)
 
 	// Returns an EmptyRowDiffer if the two schemas are not diffable.
-	if !doltdb.ArePrimaryKeySetsDiffable(format, fromSch, toSch) {
+	if !doltdb.ArePrimaryKeySetsDiffable(fromSch, toSch) {
 		return &EmptyRowDiffer{}
 	}
 

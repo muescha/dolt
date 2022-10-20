@@ -558,7 +558,7 @@ func TestNewPkOrdinals(t *testing.T) {
 					schema.NewColumn("title", dtestutils.TitleTag, types.StringKind, false),
 				),
 			),
-			err: ErrPrimaryKeySetsIncompatible,
+			err: schema.ErrPrimaryKeySetsIncompatible,
 		},
 		{
 			name: "add PK column",
@@ -572,7 +572,7 @@ func TestNewPkOrdinals(t *testing.T) {
 					schema.NewColumn("new", dtestutils.NextTag, types.StringKind, true),
 				),
 			),
-			err: ErrPrimaryKeySetsIncompatible,
+			err: schema.ErrPrimaryKeySetsIncompatible,
 		},
 		{
 			name: "change PK tag",
@@ -611,13 +611,13 @@ func TestNewPkOrdinals(t *testing.T) {
 					schema.NewColumn("title", dtestutils.TitleTag, types.StringKind, false),
 				),
 			),
-			err: ErrPrimaryKeySetsIncompatible,
+			err: schema.ErrPrimaryKeySetsIncompatible,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res, err := ModifyPkOrdinals(oldSch, tt.newSch)
+			res, err := schema.ModifyPkOrdinals(oldSch, tt.newSch)
 			if tt.err != nil {
 				require.True(t, goerrors.Is(err, tt.err))
 			} else {

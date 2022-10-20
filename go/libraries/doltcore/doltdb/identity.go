@@ -19,7 +19,6 @@ import (
 	"sort"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
-	"github.com/dolthub/dolt/go/store/types"
 	"github.com/dolthub/dolt/go/store/val"
 )
 
@@ -77,41 +76,25 @@ func MatchTablesForRoots(ctx context.Context, left, right *RootValue) (matches [
 	return matches, nil
 }
 
-// ArePrimaryKeySetsDiffable checks if two schemas are diffable. Assumes the
-// passed in schema are from the same table between commits. If __DOLT__, then
-// it also checks if the underlying SQL types of the columns are equal.
-func ArePrimaryKeySetsDiffable(format *types.NomsBinFormat, fromSch, toSch schema.Schema) bool {
+// ArePrimaryKeySetsDiffable checks if two schemas are diffable.
+func ArePrimaryKeySetsDiffable(fromSch, toSch schema.Schema) bool {
 	if fromSch == nil && toSch == nil {
 		return false
-		// Empty case
-	} else if fromSch == nil || fromSch.GetAllCols().Size() == 0 ||
-		toSch == nil || toSch.GetAllCols().Size() == 0 {
+	} else if fromSch == nil || toSch == nil {
 		return true
 	}
 
-	// Keyless case for comparing
-	if schema.IsKeyless(fromSch) && schema.IsKeyless(toSch) {
-		return true
-	}
-
-	cc1 := fromSch.GetPKCols()
-	cc2 := toSch.GetPKCols()
-
-	if cc1.Size() != cc2.Size() {
+	f, t := fromSch.GetPKCols(), toSch.GetPKCols()
+	if f.Size() != t.Size() {
 		return false
 	}
-
-	for i := 0; i < cc1.Size(); i++ {
-		c1 := cc1.GetByIndex(i)
-		c2 := cc2.GetByIndex(i)
-		if (c1.Tag != c2.Tag) || (c1.IsPartOfPK != c2.IsPartOfPK) {
-			return false
-		}
-		if types.IsFormat_DOLT(format) && !c1.TypeInfo.ToSqlType().Equals(c2.TypeInfo.ToSqlType()) {
+	for i := range f.GetColumns() {
+		fc, tc := f.GetByIndex(i), t.GetByIndex(i)
+		// todo(andy): we probably want to compare encoding here
+		if !fc.TypeInfo.Equals(tc.TypeInfo) {
 			return false
 		}
 	}
-
 	return true
 }
 
