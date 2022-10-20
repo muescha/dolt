@@ -128,6 +128,9 @@ type TagMapping map[uint64]uint64
 
 func MatchSchemaColumnsByName(lsch, rsch schema.Schema) (TagMapping, error) {
 	matches := make(TagMapping, lsch.GetAllCols().Size())
+	if lsch == nil || rsch == nil {
+		return matches, nil
+	}
 
 	// we assume primary keys match, if tables were matched
 	rcols := rsch.GetPKCols().GetColumns()

@@ -247,6 +247,81 @@ var ModifyAndChangeColumnScripts = []queries.ScriptTest{
 		},
 	},
 	{
+		Name: "add column for table with reversed primary keys",
+		SetUpScript: []string{
+			"CREATE TABLE folks (" +
+				"age int," +
+				"uuid char(32)," +
+				"first_name varchar(120)," +
+				"middle_name varchar(120)," +
+				"last_name varchar(120)," +
+				"PRIMARY KEY (last_name, first_name)" +
+				");",
+			"INSERT INTO folks VALUES (29, 'fakeuuid', 'Andy', 'William', 'Arthur');",
+		},
+		Assertions: []queries.ScriptTestAssertion{
+			{
+				Query:            "alter table folks add column title varchar(120) first",
+				SkipResultsCheck: true,
+			},
+			{
+				Query: "show create table folks",
+				Expected: []sql.Row{sql.Row{"folks", "CREATE TABLE `folks` (\n" +
+					"  `title` varchar(120),\n" +
+					"  `age` int,\n" +
+					"  `uuid` char(32),\n" +
+					"  `first_name` varchar(120) NOT NULL,\n" +
+					"  `middle_name` varchar(120),\n" +
+					"  `last_name` varchar(120) NOT NULL,\n" +
+					"  PRIMARY KEY (`last_name`,`first_name`)\n" +
+					") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin"}},
+			},
+			{
+				Query: "select * from folks",
+				Expected: []sql.Row{
+					{nil, 29, "fakeuuid", "Andy", "William", "Arthur"},
+				},
+			},
+		},
+	},
+	{
+		Name: "modify and move column for table with reversed primary keys",
+		SetUpScript: []string{
+			"CREATE TABLE folks (" +
+				"age int," +
+				"uuid char(32)," +
+				"first_name varchar(120)," +
+				"middle_name varchar(120)," +
+				"last_name varchar(120)," +
+				"PRIMARY KEY (last_name, first_name)" +
+				");",
+			"INSERT INTO folks VALUES (29, 'fakeuuid', 'Andy', 'William', 'Arthur');",
+		},
+		Assertions: []queries.ScriptTestAssertion{
+			{
+				Query:            "alter table folks modify column uuid varchar(32) after last_name",
+				SkipResultsCheck: true,
+			},
+			{
+				Query: "show create table folks",
+				Expected: []sql.Row{sql.Row{"folks", "CREATE TABLE `folks` (\n" +
+					"  `age` int,\n" +
+					"  `first_name` varchar(120) NOT NULL,\n" +
+					"  `middle_name` varchar(120),\n" +
+					"  `last_name` varchar(120) NOT NULL,\n" +
+					"  `uuid` varchar(32),\n" +
+					"  PRIMARY KEY (`last_name`,`first_name`)\n" +
+					") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin"}},
+			},
+			{
+				Query: "select * from folks",
+				Expected: []sql.Row{
+					{29, "Andy", "William", "Arthur", "fakeuuid"},
+				},
+			},
+		},
+	},
+	{
 		Name:        "alter change column drop null constraint",
 		SetUpScript: SimpsonsSetup,
 		Assertions: []queries.ScriptTestAssertion{

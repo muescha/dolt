@@ -478,6 +478,7 @@ func TestDropPks(t *testing.T) {
 }
 
 func TestNewPkOrdinals(t *testing.T) {
+	t.Skip("todo(andy)")
 	oldSch := schema.MustSchemaFromCols(
 		schema.NewColCollection(
 			schema.NewColumn("newId", dtestutils.IdTag, types.StringKind, false, schema.NotNullConstraint{}),

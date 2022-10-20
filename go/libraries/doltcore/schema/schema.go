@@ -16,6 +16,7 @@ package schema
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/dolthub/vitess/go/vt/proto/query"
 
@@ -172,30 +173,9 @@ var ErrUsingSpatialKey = errors.New("can't use Spatial Types as Primary Key for 
 // the relative positions of PKs from the oldSch. Return an ErrPrimaryKeySetsIncompatible
 // error if the two schemas have a different number of primary keys, or a primary
 // key column's tag changed between the two sets.
+// todo(andy): remove, rewrite tests
 func ModifyPkOrdinals(oldSch, newSch Schema) ([]int, error) {
-	if newSch.GetPKCols().Size() != oldSch.GetPKCols().Size() {
-		return nil, ErrPrimaryKeySetsIncompatible
-	}
-
-	newPkOrdinals := make([]int, len(newSch.GetPkOrdinals()))
-	for _, newCol := range newSch.GetPKCols().GetColumns() {
-		// ordIdx is the relative primary key order (that stays the same)
-		ordIdx, ok := oldSch.GetPKCols().TagToIdx[newCol.Tag]
-		if !ok {
-			// if pk tag changed, use name to find the new newCol tag
-			oldCol, ok := oldSch.GetPKCols().NameToCol[newCol.Name]
-			if !ok {
-				return nil, ErrPrimaryKeySetsIncompatible
-			}
-			ordIdx = oldSch.GetPKCols().TagToIdx[oldCol.Tag]
-		}
-
-		// ord is the schema ordering index, which may have changed in newSch
-		ord := newSch.GetAllCols().TagToIdx[newCol.Tag]
-		newPkOrdinals[ordIdx] = ord
-	}
-
-	return newPkOrdinals, nil
+	panic("unimplemented")
 }
 
 // GetKeyColumnTags returns a set.Uint64Set containing the column tags
@@ -207,4 +187,96 @@ func GetKeyColumnTags(sch Schema) *set.Uint64Set {
 		return
 	})
 	return tags
+}
+
+// ReplaceColumn replaces the column with the name given with its new definition, optionally reordering it.
+func ReplaceColumn(sch Schema, oldCol, newCol Column, order *ColumnOrder) (Schema, error) {
+	if oldCol.IsPartOfPK != newCol.IsPartOfPK { // validate pk status unchanged
+		return nil, errors.New("cannot add of drop PRIMARY KEY via ReplaceColumn")
+	}
+
+	// If no order is specified, insert in the same place as the existing column
+	if order == nil {
+		order = &ColumnOrder{First: true}
+		var found bool
+		for _, c := range sch.GetAllCols().GetColumns() {
+			if c.Name == oldCol.Name {
+				found = true
+				break
+			}
+			order.First = false
+			order.AfterColumn = c.Name
+		}
+		if !found {
+			return nil, fmt.Errorf("couldn't find column %s", oldCol.Name)
+		}
+	}
+
+	var newCols []Column
+	if order.First {
+		newCols = append(newCols, newCol)
+	}
+
+	oldCC := sch.GetAllCols()
+	for _, col := range oldCC.GetColumns() {
+		if col.Name != oldCol.Name {
+			newCols = append(newCols, col)
+		}
+		if order.AfterColumn == col.Name {
+			newCols = append(newCols, newCol)
+		}
+	}
+
+	newCC := NewColCollection(newCols...)
+	if err := ValidateForInsert(newCC); err != nil {
+		return nil, err
+	}
+
+	newSch, err := SchemaFromCols(newCC)
+	if err != nil {
+		return nil, err
+	}
+
+	// translate |ordinals| between schemas
+	ordinals := sch.GetPkOrdinals()
+	for i, ord := range ordinals {
+		// use |ord| to get the name of the ith pk
+		name := oldCC.GetByIndex(ord).Name
+		if name == oldCol.Name {
+			name = newCol.Name
+		}
+		// use |name| to get the pk's new ordinal
+		col, _ := newCC.GetByName(name)
+		ordinals[i] = newCC.TagToIdx[col.Tag]
+	}
+	if err = newSch.SetPkOrdinals(ordinals); err != nil {
+		return nil, err
+	}
+
+	// copy over indexes, updating tag where necessary
+	for _, index := range sch.Indexes().AllIndexes() {
+		tags := index.IndexedColumnTags()
+		for i := range tags {
+			if tags[i] == oldCol.Tag {
+				tags[i] = newCol.Tag
+			}
+		}
+		_, err = newSch.Indexes().AddIndexByColTags(index.Name(), tags, IndexProperties{
+			IsUnique:      index.IsUnique(),
+			IsUserDefined: index.IsUserDefined(),
+			Comment:       index.Comment(),
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// copy over all checks from the old schema
+	for _, check := range sch.Checks().AllChecks() {
+		_, err := newSch.Checks().AddCheck(check.Name(), check.Expression(), check.Enforced())
+		if err != nil {
+			return nil, err
+		}
+	}
+	return newSch, nil
 }

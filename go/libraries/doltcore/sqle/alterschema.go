@@ -25,10 +25,8 @@ import (
 	errors2 "gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema/typeinfo"
-	"github.com/dolthub/dolt/go/store/types"
 )
 
 var ErrUsingSpatialKey = errors2.NewKind("can't use Spatial Types as Primary Key for table %s")
@@ -185,120 +183,12 @@ func modifyColumn(
 		}
 	}
 
-	newSchema, err := replaceColumnInSchema(sch, existingCol, newCol, order)
+	newSchema, err := schema.ReplaceColumn(sch, existingCol, newCol, orderToOrder(order))
 	if err != nil {
 		return nil, err
 	}
 
 	return tbl.UpdateSchema(ctx, newSchema)
-}
-
-// replaceColumnInSchema replaces the column with the name given with its new definition, optionally reordering it.
-// TODO: make this a schema API?
-func replaceColumnInSchema(sch schema.Schema, oldCol schema.Column, newCol schema.Column, order *sql.ColumnOrder) (schema.Schema, error) {
-	// If no order is specified, insert in the same place as the existing column
-	prevColumn := ""
-	for _, col := range sch.GetAllCols().GetColumns() {
-		if col.Name == oldCol.Name {
-			if prevColumn == "" {
-				if order == nil {
-					order = &sql.ColumnOrder{First: true}
-				}
-			}
-			break
-		} else {
-			prevColumn = col.Name
-		}
-	}
-
-	if order == nil {
-		if prevColumn != "" {
-			order = &sql.ColumnOrder{AfterColumn: prevColumn}
-		} else {
-			return nil, fmt.Errorf("Couldn't find column %s", oldCol.Name)
-		}
-	}
-
-	var newCols []schema.Column
-	if order.First {
-		newCols = append(newCols, newCol)
-	}
-
-	for _, col := range sch.GetAllCols().GetColumns() {
-		if col.Name != oldCol.Name {
-			newCols = append(newCols, col)
-		}
-
-		if order.AfterColumn == col.Name {
-			newCols = append(newCols, newCol)
-		}
-	}
-
-	collection := schema.NewColCollection(newCols...)
-
-	err := schema.ValidateForInsert(collection)
-	if err != nil {
-		return nil, err
-	}
-
-	newSch, err := schema.SchemaFromCols(collection)
-	if err != nil {
-		return nil, err
-	}
-	for _, index := range sch.Indexes().AllIndexes() {
-		tags := index.IndexedColumnTags()
-		for i := range tags {
-			if tags[i] == oldCol.Tag {
-				tags[i] = newCol.Tag
-			}
-		}
-		_, err = newSch.Indexes().AddIndexByColTags(index.Name(), tags, schema.IndexProperties{
-			IsUnique:      index.IsUnique(),
-			IsUserDefined: index.IsUserDefined(),
-			Comment:       index.Comment(),
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Copy over all checks from the old schema
-	for _, check := range sch.Checks().AllChecks() {
-		_, err := newSch.Checks().AddCheck(check.Name(), check.Expression(), check.Enforced())
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	pkOrds, err := schema.ModifyPkOrdinals(sch, newSch)
-	if err != nil {
-		return nil, err
-	}
-	err = newSch.SetPkOrdinals(pkOrds)
-	if err != nil {
-		return nil, err
-	}
-	return newSch, nil
-}
-
-func fmtPrimaryKeyError(sch schema.Schema, keylessRow row.Row) error {
-	pkTags := sch.GetPKCols().Tags
-
-	vals := make([]string, len(pkTags))
-	for i, tg := range sch.GetPKCols().Tags {
-		val, ok := keylessRow.GetColVal(tg)
-		if !ok {
-			panic("tag for primary key wasn't found")
-		}
-
-		vals[i] = val.HumanReadableString()
-	}
-
-	return sql.NewUniqueKeyErr(fmt.Sprintf("[%s]", strings.Join(vals, ",")), true, nil)
-}
-
-func duplicatePkFunction(keyString, indexName string, k, v types.Tuple, isPk bool) error {
-	return sql.NewUniqueKeyErr(fmt.Sprintf("%s", keyString), true, nil)
 }
 
 var ErrKeylessAltTbl = errors.New("schema alterations not supported for keyless tables")
