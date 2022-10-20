@@ -17,8 +17,6 @@ package enginetest
 import (
 	"github.com/dolthub/go-mysql-server/enginetest/queries"
 	"github.com/dolthub/go-mysql-server/sql"
-
-	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 )
 
 // Tests in this file are a grab bag of DDL queries, many of them ported from older parts of the Dolt codebase
@@ -504,7 +502,7 @@ var ModifyColumnTypeScripts = []queries.ScriptTest{
 		Assertions: []queries.ScriptTestAssertion{
 			{
 				Query:          "alter table point_tbl modify column p point primary key",
-				ExpectedErrStr: schema.ErrUsingSpatialKey.Error(),
+				ExpectedErrStr: "can't use Spatial Types as Primary Key for table point_tbl",
 			},
 		},
 	},

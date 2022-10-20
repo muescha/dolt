@@ -564,7 +564,7 @@ func TestRenameColumn(t *testing.T) {
 				schema.NewColumn("last_name", LastNameTag, types.StringKind, false, schema.NotNullConstraint{}),
 				schema.NewColumn("is_married", IsMarriedTag, types.IntKind, false),
 				schema.NewColumn("age", AgeTag, types.IntKind, false),
-				schema.NewColumn("newRating", RatingTag, types.FloatKind, false),
+				schema.NewColumn("newRating", tagOf("newRating"), types.FloatKind, false),
 				schema.NewColumn("uuid", UuidTag, types.StringKind, false),
 				schema.NewColumn("num_episodes", NumEpisodesTag, types.UintKind, false),
 			),
@@ -579,7 +579,7 @@ func TestRenameColumn(t *testing.T) {
 				schema.NewColumn("last_name", LastNameTag, types.StringKind, false, schema.NotNullConstraint{}),
 				schema.NewColumn("is_married", IsMarriedTag, types.IntKind, false),
 				schema.NewColumn("age", AgeTag, types.IntKind, false),
-				schema.NewColumn("newRating", RatingTag, types.FloatKind, false),
+				schema.NewColumn("newRating", tagOf("newRating"), types.FloatKind, false),
 				schema.NewColumn("uuid", UuidTag, types.StringKind, false),
 				schema.NewColumn("num_episodes", NumEpisodesTag, types.UintKind, false),
 			),
@@ -589,7 +589,7 @@ func TestRenameColumn(t *testing.T) {
 			name:  "alter rename primary key column",
 			query: "alter table people rename column id to newId",
 			expectedSchema: dtestutils.CreateSchema(
-				schema.NewColumn("newId", IdTag, types.IntKind, true, schema.NotNullConstraint{}),
+				schema.NewColumn("newId", tagOf("newId"), types.IntKind, true, schema.NotNullConstraint{}),
 				schema.NewColumn("first_name", FirstNameTag, types.StringKind, false, schema.NotNullConstraint{}),
 				schema.NewColumn("last_name", LastNameTag, types.StringKind, false, schema.NotNullConstraint{}),
 				schema.NewColumn("is_married", IsMarriedTag, types.IntKind, false),
@@ -1210,4 +1210,8 @@ func assertSucceeds(t *testing.T, dEnv *env.DoltEnv, query string) {
 	root, _ := dEnv.WorkingRoot(ctx)
 	_, err := ExecuteSql(t, dEnv, root, query)
 	assert.NoError(t, err, query)
+}
+
+func tagOf(name string) uint64 {
+	return schema.ColumnTagFromName(name)
 }

@@ -59,7 +59,6 @@ const (
 // Returns an error if the column added conflicts with the existing schema in tag or name.
 func addColumnToTable(
 	ctx context.Context,
-	root *doltdb.RootValue,
 	tbl *doltdb.Table,
 	tblName string,
 	tag uint64,
@@ -79,7 +78,7 @@ func addColumnToTable(
 		return nil, ErrKeylessAltTbl
 	}
 
-	if err := validateNewColumn(ctx, root, tbl, tblName, tag, newColName, typeInfo); err != nil {
+	if err := validateNewColumn(ctx, tbl, tblName, tag, newColName, typeInfo); err != nil {
 		return nil, err
 	}
 
@@ -123,7 +122,6 @@ func createColumn(nullable Nullable, newColName string, tag uint64, typeInfo typ
 // ValidateNewColumn returns an error if the column as specified cannot be added to the schema given.
 func validateNewColumn(
 	ctx context.Context,
-	root *doltdb.RootValue,
 	tbl *doltdb.Table,
 	tblName string,
 	tag uint64,
@@ -142,7 +140,9 @@ func validateNewColumn(
 
 	cols := sch.GetAllCols()
 	err = cols.Iter(func(currColTag uint64, currCol schema.Column) (stop bool, err error) {
-		if strings.ToLower(currCol.Name) == strings.ToLower(newColName) {
+		if currColTag == tag {
+			return false, schema.ErrTagPrevUsed(tag, newColName, tblName)
+		} else if strings.ToLower(currCol.Name) == strings.ToLower(newColName) {
 			return true, fmt.Errorf("A column with the name %s already exists in table %s.", newColName, tblName)
 		}
 		return false, nil

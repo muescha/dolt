@@ -260,53 +260,6 @@ func TestColumnMatching(t *testing.T) {
 			},
 		},
 		{
-			name: "heuristic column matching",
-			left: []table{
-				{
-					name: "t",
-					cols: []column{
-						{name: "pk", enc: val.Int64Enc, pk: true},
-						{name: "a", enc: val.Int64Enc},
-						{name: "b", enc: val.Int64Enc},
-					},
-					rows: [][]int64{
-						{1, 1, -6},
-						{2, 2, -7},
-						{3, 3, -8},
-						{4, 4, -9},
-						{5, 5, -0},
-					},
-				},
-			},
-			right: []table{
-				{
-					name: "t",
-					cols: []column{
-						{name: "pk", enc: val.Int64Enc, pk: true},
-						{name: "x", enc: val.Int64Enc},
-						{name: "y", enc: val.Int64Enc},
-					},
-					rows: [][]int64{
-						{1, 1, 1},
-						{2, 0, 0},
-						{3, 3, 0},
-						{4, 0, 0},
-						{5, 5, 0},
-					},
-				},
-			},
-			matches: []match{
-				{
-					leftTbl: "t", rightTbl: "t",
-					columnMatches: [][2]string{
-						{"pk", "pk"},
-						{"a", "x"},
-						// columns 'b', 'y' unmatched
-					},
-				},
-			},
-		},
-		{
 			name: "keyless table union",
 			left: []table{
 				{

@@ -15,6 +15,7 @@
 package schema
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/zeebo/xxh3"
@@ -23,4 +24,8 @@ import (
 func ColumnTagFromName(name string) uint64 {
 	h64 := xxh3.HashString(strings.ToLower(name))
 	return uint64(uint16(h64))
+}
+
+func ErrTagPrevUsed(tag uint64, newColName, tableName string) error {
+	return fmt.Errorf("Cannot create column %s, the tag %d was already used in table %s", newColName, tag, tableName)
 }

@@ -1161,7 +1161,7 @@ func (t *AlterableDoltTable) AddColumn(ctx *sql.Context, column *sql.Column, ord
 		nullable = Null
 	}
 
-	updatedTable, err := addColumnToTable(ctx, root, table, t.tableName, col.Tag, col.Name, col.TypeInfo, nullable, column.Default, col.Comment, order)
+	updatedTable, err := addColumnToTable(ctx, table, t.tableName, col.Tag, col.Name, col.TypeInfo, nullable, column.Default, col.Comment, order)
 	if err != nil {
 		return err
 	}
