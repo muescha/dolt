@@ -80,7 +80,14 @@ func MatchTablesForRoots(ctx context.Context, left, right *RootValue) (matches [
 func ArePrimaryKeySetsDiffable(fromSch, toSch schema.Schema) bool {
 	if fromSch == nil && toSch == nil {
 		return false
-	} else if fromSch == nil || toSch == nil {
+		// Empty case
+	} else if fromSch == nil || fromSch.GetAllCols().Size() == 0 ||
+		toSch == nil || toSch.GetAllCols().Size() == 0 {
+		return true
+	}
+
+	// Keyless case for comparing
+	if schema.IsKeyless(fromSch) && schema.IsKeyless(toSch) {
 		return true
 	}
 
@@ -128,16 +135,18 @@ type TagMapping map[uint64]uint64
 
 func MatchSchemaColumnsByName(lsch, rsch schema.Schema) (TagMapping, error) {
 	matches := make(TagMapping, lsch.GetAllCols().Size())
-	if lsch == nil || rsch == nil {
+	if lsch == nil || lsch.GetAllCols().Size() == 0 ||
+		rsch == nil || rsch.GetAllCols().Size() == 0 {
 		return matches, nil
 	}
 
-	// we assume primary keys match, if tables were matched
+	// match primary keys by ordinal position
 	rcols := rsch.GetPKCols().GetColumns()
 	for i, l := range lsch.GetPKCols().GetColumns() {
 		matches[l.Tag] = rcols[i].Tag
 	}
 
+	// match non-primary keys by name
 	for _, lc := range lsch.GetNonPKCols().GetColumns() {
 		rc, ok := rsch.GetNonPKCols().GetByName(lc.Name)
 		if !ok {

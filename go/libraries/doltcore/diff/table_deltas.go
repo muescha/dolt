@@ -20,7 +20,6 @@ import (
 	"sort"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb/durable"
-	"github.com/dolthub/dolt/go/libraries/utils/set"
 	"github.com/dolthub/dolt/go/store/prolly/tree"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -224,25 +223,10 @@ func matchTableDeltas(fromDeltas, toDeltas []TableDelta) (deltas []TableDelta) {
 	deltas = make([]TableDelta, 0)
 
 	for _, name := range matchedNames {
-		t := to[name]
-		f := from[name]
-		if schemasOverlap(t.ToSch, f.FromSch) {
-			matched := match(t, f)
-			deltas = append(deltas, matched)
-			delete(from, f.FromName)
-			delete(to, t.ToName)
-		}
-	}
-
-	for _, f := range from {
-		for _, t := range to {
-			if schemasOverlap(f.FromSch, t.ToSch) {
-				matched := match(t, f)
-				deltas = append(deltas, matched)
-				delete(from, f.FromName)
-				delete(to, t.ToName)
-			}
-		}
+		f, t := from[name], to[name]
+		deltas = append(deltas, match(t, f))
+		delete(from, f.FromName)
+		delete(to, t.ToName)
 	}
 
 	// append unmatched TableDeltas
@@ -254,12 +238,6 @@ func matchTableDeltas(fromDeltas, toDeltas []TableDelta) (deltas []TableDelta) {
 	}
 
 	return deltas
-}
-
-func schemasOverlap(from, to schema.Schema) bool {
-	f := set.NewUint64Set(from.GetAllCols().Tags)
-	t := set.NewUint64Set(to.GetAllCols().Tags)
-	return f.Intersection(t).Size() > 0
 }
 
 // IsAdd returns true if the table was added between the fromRoot and toRoot.

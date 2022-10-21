@@ -4006,16 +4006,16 @@ var DiffSystemTableScriptTests = []queries.ScriptTest{
 			},
 			{
 				Query: "SELECT to_pk, to_c1, from_pk, from_c1, diff_type FROM DOLT_DIFF_t WHERE TO_COMMIT=@Commit1 ORDER BY to_pk;",
-				Expected: []sql.Row{
-					{1, 2, nil, nil, "added"},
-					{4, 5, nil, nil, "added"},
+				Expected: []sql.Row{ // columns matched by name
+					{1, 3, nil, nil, "added"},
+					{4, 6, nil, nil, "added"},
 				},
 			},
 			{
 				Query: "SELECT to_pk, to_c1, from_pk, from_c1, diff_type FROM DOLT_DIFF_t WHERE TO_COMMIT=@Commit2 ORDER BY to_pk;",
-				Expected: []sql.Row{
-					{1, nil, 1, 2, "modified"},
-					{4, nil, 4, 5, "modified"},
+				Expected: []sql.Row{ // columns matched by name
+					{1, 3, 1, 3, "modified"},
+					{4, 6, 4, 6, "modified"},
 				},
 			},
 			{
@@ -4189,8 +4189,8 @@ var DiffSystemTableScriptTests = []queries.ScriptTest{
 			},
 			{
 				Query: "SELECT to_pk, to_c2, from_pk, from_c2, diff_type FROM DOLT_DIFF_t WHERE TO_COMMIT=@Commit1 ORDER BY to_pk;",
-				Expected: []sql.Row{
-					{1, nil, nil, nil, "added"},
+				Expected: []sql.Row{ // columns matched by name
+					{1, 2, nil, nil, "added"},
 				},
 			},
 			{
@@ -4901,12 +4901,11 @@ var DiffTableFunctionScriptTests = []queries.ScriptTest{
 		Assertions: []queries.ScriptTestAssertion{
 			{
 				Query:    "select to_a, to_b, from_commit, to_commit, diff_type from dolt_diff('HEAD~', 'HEAD', 't2')",
-				Expected: []sql.Row{{3, 4, "HEAD~", "HEAD", "added"}},
+				Expected: []sql.Row{{1, 2, "HEAD~", "HEAD", "added"}, {3, 4, "HEAD~", "HEAD", "added"}},
 			},
 			{
-				// Maybe confusing? We match the old table name as well
-				Query:    "select to_a, to_b, from_commit, to_commit, diff_type from dolt_diff('HEAD~', 'HEAD', 't1')",
-				Expected: []sql.Row{{3, 4, "HEAD~", "HEAD", "added"}},
+				Query:          "select to_a, to_b, from_commit, to_commit, diff_type from dolt_diff('HEAD~', 'HEAD', 't1')",
+				ExpectedErrStr: "column \"to_a\" could not be found in any table in scope",
 			},
 		},
 	},
@@ -5708,13 +5707,14 @@ var DiffSummaryTableFunctionScriptTests = []queries.ScriptTest{
 		},
 		Assertions: []queries.ScriptTestAssertion{
 			{
+				// tables with different names are not matched
 				Query:    "select * from dolt_diff_summary('HEAD~', 'HEAD', 't2')",
-				Expected: []sql.Row{{"t2", 1, 1, 0, 0, 2, 0, 0, 1, 2, 2, 4}},
+				Expected: []sql.Row{{"t2", 0, 2, 0, 0, 4, 0, 0, 0, 2, 0, 4}},
 			},
 			{
-				// Old table name can be matched as well
+				// Old table name matches as a different table
 				Query:    "select * from dolt_diff_summary('HEAD~', 'HEAD', 't1')",
-				Expected: []sql.Row{{"t1", 1, 1, 0, 0, 2, 0, 0, 1, 2, 2, 4}},
+				Expected: []sql.Row{{"t1", 0, 0, 1, 0, 0, 2, 0, 1, 0, 2, 0}},
 			},
 		},
 	},
@@ -5799,7 +5799,20 @@ var UnscopedDiffSystemTableScriptTests = []queries.ScriptTest{
 		Assertions: []queries.ScriptTestAssertion{
 			{
 				Query:    "SELECT COUNT(*) FROM DOLT_DIFF;",
-				Expected: []sql.Row{{7}},
+				Expected: []sql.Row{{8}},
+			},
+			{
+				Query: "SELECT table_name, message, data_change, schema_change FROM DOLT_DIFF;",
+				Expected: []sql.Row{
+					{"droppedTable", nil, true, true},
+					{"addedTable", nil, false, true},
+					{"regularTable", nil, true, false},
+					{"renamedEmptyTable", nil, false, true},
+					{"newRenamedEmptyTable", nil, false, true},
+					{"droppedTable", "Creating tables x and y", true, true},
+					{"regularTable", "Creating tables x and y", true, true},
+					{"renamedEmptyTable", "Creating tables x and y", false, true},
+				},
 			},
 			{
 				Query:    "SELECT COUNT(*) FROM DOLT_DIFF WHERE commit_hash = @Commit1;",
@@ -5818,6 +5831,7 @@ var UnscopedDiffSystemTableScriptTests = []queries.ScriptTest{
 				Expected: []sql.Row{
 					{"WORKING", "newRenamedEmptyTable"},
 					{"WORKING", "regularTable"},
+					{"WORKING", "renamedEmptyTable"},
 				},
 			},
 			{
@@ -5827,6 +5841,7 @@ var UnscopedDiffSystemTableScriptTests = []queries.ScriptTest{
 					{"STAGED", "droppedTable"},
 					{"WORKING", "newRenamedEmptyTable"},
 					{"WORKING", "regularTable"},
+					{"WORKING", "renamedEmptyTable"},
 				},
 			},
 			{
@@ -5836,6 +5851,7 @@ var UnscopedDiffSystemTableScriptTests = []queries.ScriptTest{
 					{"STAGED", "droppedTable", nil, nil, nil, nil, true, true},
 					{"WORKING", "newRenamedEmptyTable", nil, nil, nil, nil, false, true},
 					{"WORKING", "regularTable", nil, nil, nil, nil, true, false},
+					{"WORKING", "renamedEmptyTable", nil, nil, nil, nil, false, true},
 				},
 			},
 		},
@@ -5906,7 +5922,7 @@ var UnscopedDiffSystemTableScriptTests = []queries.ScriptTest{
 		Assertions: []queries.ScriptTestAssertion{
 			{
 				Query:    "SELECT COUNT(*) FROM DOLT_DIFF",
-				Expected: []sql.Row{{5}},
+				Expected: []sql.Row{{7}},
 			},
 			{
 				Query:    "select table_name, schema_change, data_change from DOLT_DIFF where commit_hash in (@Commit1)",
@@ -5918,11 +5934,11 @@ var UnscopedDiffSystemTableScriptTests = []queries.ScriptTest{
 			},
 			{
 				Query:    "select table_name, schema_change, data_change from DOLT_DIFF where commit_hash in (@Commit3)",
-				Expected: []sql.Row{{"x1", true, true}},
+				Expected: []sql.Row{{"x", true, true}, {"x1", true, true}},
 			},
 			{
 				Query:    "select table_name, schema_change, data_change from DOLT_DIFF where commit_hash in (@Commit4)",
-				Expected: []sql.Row{{"x2", true, false}},
+				Expected: []sql.Row{{"x1", true, true}, {"x2", true, true}},
 			},
 		},
 	},
@@ -6244,16 +6260,16 @@ var CommitDiffSystemTableScriptTests = []queries.ScriptTest{
 		Assertions: []queries.ScriptTestAssertion{
 			{
 				Query: "SELECT to_pk, to_c1, from_pk, from_c1, diff_type FROM DOLT_COMMIT_DIFF_t WHERE TO_COMMIT=@Commit1 and FROM_COMMIT=@Commit0 ORDER BY to_pk;",
-				Expected: []sql.Row{
-					{1, 2, nil, nil, "added"},
-					{4, 5, nil, nil, "added"},
+				Expected: []sql.Row{ // match by name
+					{1, 3, nil, nil, "added"},
+					{4, 6, nil, nil, "added"},
 				},
 			},
 			{
 				Query: "SELECT to_pk, to_c1, from_pk, from_c1, diff_type FROM DOLT_COMMIT_DIFF_t WHERE TO_COMMIT=@Commit2 and FROM_COMMIT=@Commit1 ORDER BY to_pk;",
-				Expected: []sql.Row{
-					{1, nil, 1, 2, "modified"},
-					{4, nil, 4, 5, "modified"},
+				Expected: []sql.Row{ // match by name
+					{1, 3, 1, 3, "modified"},
+					{4, 6, 4, 6, "modified"},
 				},
 			},
 			{
@@ -6375,7 +6391,7 @@ var CommitDiffSystemTableScriptTests = []queries.ScriptTest{
 			{
 				Query:                           "select * from dolt_commit_diff_t where from_commit=@Commit1 and to_commit=@Commit4;",
 				ExpectedWarning:                 1105,
-				ExpectedWarningsCount:           1,
+				ExpectedWarningsCount:           0,
 				ExpectedWarningMessageSubstring: "cannot render full diff between commits",
 				SkipResultsCheck:                true,
 			},

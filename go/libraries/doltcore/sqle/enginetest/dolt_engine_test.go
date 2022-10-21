@@ -108,33 +108,8 @@ func TestSingleQuery(t *testing.T) {
 
 // Convenience test for debugging a single query. Unskip and set to the desired query.
 func TestSingleScript(t *testing.T) {
-	var scripts = []queries.ScriptTest{
-		{
-			Name: "trigger before update, with indexed update",
-			SetUpScript: []string{
-				"create table a (x int primary key, y int, unique key (y))",
-				"create table b (z int primary key)",
-				"insert into a values (1,3), (10,20)",
-				"create trigger insert_b before update on a for each row insert into b values (old.x * 10)",
-				"update a set x = x + 1 where y = 20",
-			},
-			Assertions: []queries.ScriptTestAssertion{
-				{
-					Query: "select x, y from a order by 1",
-					Expected: []sql.Row{
-						{1, 3},
-						{11, 20},
-					},
-				},
-				{
-					Query: "select z from b",
-					Expected: []sql.Row{
-						{100},
-					},
-				},
-			},
-		},
-	}
+	t.Skip()
+	var scripts = []queries.ScriptTest{}
 
 	harness := newDoltHarness(t)
 	for _, test := range scripts {

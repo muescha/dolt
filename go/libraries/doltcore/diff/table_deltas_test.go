@@ -24,41 +24,35 @@ import (
 )
 
 var sch = schema.MustSchemaFromCols(schema.NewColCollection(
-	schema.NewColumn("pk", 0, types.StringKind, false),
+	schema.NewColumn("pk", 1, types.StringKind, true),
 ))
 var sch2 = schema.MustSchemaFromCols(schema.NewColCollection(
 	schema.NewColumn("pk2", 1, types.StringKind, false),
 ))
 var sch3 = schema.MustSchemaFromCols(schema.NewColCollection(
-	schema.NewColumn("pk3", 2, types.StringKind, false),
-))
-var sch4 = schema.MustSchemaFromCols(schema.NewColCollection(
-	schema.NewColumn("pk4", 3, types.StringKind, false),
-))
-var sch5 = schema.MustSchemaFromCols(schema.NewColCollection(
-	schema.NewColumn("pk5", 4, types.StringKind, false),
+	schema.NewColumn("pk3", 1, types.IntKind, true),
 ))
 
 func TestMatchTableDeltas(t *testing.T) {
 	var fromDeltas = []TableDelta{
-		{FromName: "should_match_on_name", FromSch: sch},
-		{FromName: "dropped", FromSch: sch},
-		{FromName: "dropped2", FromSch: sch3},
-		{FromName: "renamed_before", FromSch: sch5},
+		{FromName: "name_match", FromSch: sch},
+		{FromName: "keyless_name_match", FromSch: sch2},
+		{FromName: "from_no_match", FromSch: sch},
+		{FromName: "no_match", FromSch: sch},
 	}
 	var toDeltas = []TableDelta{
-		{ToName: "should_match_on_name", ToSch: sch},
-		{ToName: "added", ToSch: sch2},
-		{ToName: "added2", ToSch: sch4},
-		{ToName: "renamed_after", ToSch: sch5},
+		{ToName: "name_match", ToSch: sch},
+		{ToName: "keyless_name_match", ToSch: sch2},
+		{ToName: "to_no_match", ToSch: sch},
+		{ToName: "no_match", ToSch: sch3},
 	}
 	expected := []TableDelta{
-		{FromName: "should_match_on_name", ToName: "should_match_on_name", FromSch: sch, ToSch: sch},
-		{FromName: "renamed_before", ToName: "renamed_after", FromSch: sch5, ToSch: sch5},
-		{FromName: "dropped", FromSch: sch},
-		{FromName: "dropped2", FromSch: sch3},
-		{ToName: "added", ToSch: sch2},
-		{ToName: "added2", ToSch: sch4},
+		{FromName: "name_match", ToName: "name_match", FromSch: sch, ToSch: sch},
+		{FromName: "keyless_name_match", ToName: "keyless_name_match", FromSch: sch2, ToSch: sch2},
+		{FromName: "from_no_match", FromSch: sch},
+		{FromName: "no_match", FromSch: sch},
+		{ToName: "to_no_match", ToSch: sch},
+		{ToName: "no_match", ToSch: sch3},
 	}
 
 	for i := 0; i < 100; i++ {
