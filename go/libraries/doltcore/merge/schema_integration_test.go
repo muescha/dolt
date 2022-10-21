@@ -175,7 +175,6 @@ var mergeSchemaTests = []mergeSchemaTest{
 		),
 	},
 	{
-		// todo(andy)
 		name: "rename columns",
 		setup: []testCommand{
 			{commands.SqlCmd{}, []string{"-q", "alter table test rename column c3 to c33;"}},
@@ -191,8 +190,8 @@ var mergeSchemaTests = []mergeSchemaTest{
 			colCollection(
 				newColTypeInfo("pk", tagOf("pk"), typeinfo.Int32Type, true, schema.NotNullConstraint{}),
 				newColTypeInfo("c1", tagOf("c1"), typeinfo.Int32Type, false, schema.NotNullConstraint{}),
-				newColTypeInfo("c22", tagOf("c2"), typeinfo.Int32Type, false),
-				newColTypeInfo("c33", tagOf("c3"), typeinfo.Int32Type, false)),
+				newColTypeInfo("c33", tagOf("c33"), typeinfo.Int32Type, false),
+				newColTypeInfo("c22", tagOf("c22"), typeinfo.Int32Type, false)),
 			schema.NewIndex("c1_idx", []uint64{tagOf("c1")}, []uint64{tagOf("c1"), tagOf("pk")}, nil, schema.IndexProperties{IsUserDefined: true}),
 		),
 	},
@@ -332,6 +331,11 @@ var mergeSchemaConflictTests = []mergeSchemaConflictTest{
 		expConflict: merge.SchemaConflict{
 			TableName: "test",
 			ColConflicts: []merge.ColConflict{
+				{
+					Kind:   merge.TagCollision,
+					Ours:   newColTypeInfo("c6", tagOf("c6"), typeinfo.Int64Type, false),
+					Theirs: newColTypeInfo("c6", tagOf("c6"), typeinfo.Int8Type, false),
+				},
 				{
 					Kind:   merge.TagCollision,
 					Ours:   newColTypeInfo("c6", tagOf("c6"), typeinfo.Int64Type, false),

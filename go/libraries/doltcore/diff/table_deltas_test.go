@@ -38,21 +38,17 @@ func TestMatchTableDeltas(t *testing.T) {
 		{FromName: "name_match", FromSch: sch},
 		{FromName: "keyless_name_match", FromSch: sch2},
 		{FromName: "from_no_match", FromSch: sch},
-		{FromName: "no_match", FromSch: sch},
 	}
 	var toDeltas = []TableDelta{
 		{ToName: "name_match", ToSch: sch},
 		{ToName: "keyless_name_match", ToSch: sch2},
 		{ToName: "to_no_match", ToSch: sch},
-		{ToName: "no_match", ToSch: sch3},
 	}
 	expected := []TableDelta{
 		{FromName: "name_match", ToName: "name_match", FromSch: sch, ToSch: sch},
 		{FromName: "keyless_name_match", ToName: "keyless_name_match", FromSch: sch2, ToSch: sch2},
 		{FromName: "from_no_match", FromSch: sch},
-		{FromName: "no_match", FromSch: sch},
 		{ToName: "to_no_match", ToSch: sch},
-		{ToName: "no_match", ToSch: sch3},
 	}
 
 	for i := 0; i < 100; i++ {

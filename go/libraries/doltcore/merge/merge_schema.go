@@ -205,7 +205,7 @@ func mergeColumns(ourCC, theirCC, ancCC *schema.ColCollection) (merged *schema.C
 	// check for name conflicts between columns added on each branch since the ancestor
 	_ = ourNewCols.Iter(func(tag uint64, ourCol schema.Column) (stop bool, err error) {
 		theirCol, ok := theirNewCols.GetByNameCaseInsensitive(ourCol.Name)
-		if ok && ourCol.Tag != theirCol.Tag {
+		if ok && !ourCol.TypeInfo.Equals(theirCol.TypeInfo) {
 			conflicts = append(conflicts, ColConflict{
 				Kind:   NameCollision,
 				Ours:   ourCol,
@@ -233,7 +233,7 @@ func mergeColumns(ourCC, theirCC, ancCC *schema.ColCollection) (merged *schema.C
 func columnsInCommon(ourCC, theirCC, ancCC *schema.ColCollection) (common *schema.ColCollection, conflicts []ColConflict) {
 	common = schema.NewColCollection()
 	_ = ourCC.Iter(func(tag uint64, ourCol schema.Column) (stop bool, err error) {
-		theirCol, ok := theirCC.GetByTag(ourCol.Tag)
+		theirCol, ok := theirCC.GetByNameCaseInsensitive(ourCol.Name)
 		if !ok {
 			return false, nil
 		}
@@ -243,11 +243,11 @@ func columnsInCommon(ourCC, theirCC, ancCC *schema.ColCollection) (common *schem
 			return false, nil
 		}
 
-		ancCol, ok := ancCC.GetByTag(ourCol.Tag)
+		ancCol, ok := ancCC.GetByNameCaseInsensitive(ourCol.Name)
 		if !ok {
 			// col added on our branch and their branch with different def
 			conflicts = append(conflicts, ColConflict{
-				Kind:   TagCollision,
+				Kind:   NameCollision,
 				Ours:   ourCol,
 				Theirs: theirCol,
 			})
@@ -286,7 +286,7 @@ func columnsInCommon(ourCC, theirCC, ancCC *schema.ColCollection) (common *schem
 
 		// col modified on our branch and their branch with different def
 		conflicts = append(conflicts, ColConflict{
-			Kind:   TagCollision,
+			Kind:   NameCollision,
 			Ours:   ourCol,
 			Theirs: theirCol,
 		})

@@ -299,7 +299,7 @@ func ColCollUnion(colColls ...*ColCollection) (*ColCollection, error) {
 // ColCollectionSetDifference returns the set difference leftCC - rightCC.
 func ColCollectionSetDifference(leftCC, rightCC *ColCollection) (d *ColCollection) {
 	d = FilterColCollection(leftCC, func(col Column) bool {
-		_, ok := rightCC.GetByTag(col.Tag)
+		_, ok := rightCC.GetByNameCaseInsensitive(col.Name)
 		return !ok
 	})
 	return d
