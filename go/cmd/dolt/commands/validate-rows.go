@@ -18,8 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/dolthub/dolt/go/store/types"
 	"io"
+
+	"github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
@@ -119,7 +120,28 @@ func validateTableData(ctx context.Context, t *doltdb.Table, cb func(msg string)
 	if err != nil {
 		return err
 	}
+	tup := prev.(types.Tuple)
+	sz := tup.Len()
 
+	kinds := make([]types.NomsKind, sz)
+	for i := range kinds {
+		v, err := tup.Get(uint64(i))
+		if err != nil {
+			return err
+		}
+		kinds[i] = v.Kind()
+	}
+
+	tags := make([]uint64, sz/2)
+	for i := range tags {
+		v, err := tup.Get(uint64(i * 2))
+		if err != nil {
+			return err
+		}
+		tags[i] = uint64(v.(types.Uint))
+	}
+
+	i := 1
 	for {
 		var k types.Value
 		k, _, err = iter.Next(ctx)
@@ -127,6 +149,32 @@ func validateTableData(ctx context.Context, t *doltdb.Table, cb func(msg string)
 			break
 		} else if err != nil {
 			return err
+		}
+		if k.(types.Tuple).Len() != sz {
+			cb(fmt.Sprintf("unexpected length for key %s, (%d != %d)",
+				k.HumanReadableString(), k.(types.Tuple).Len(), sz))
+		}
+
+		for i := range kinds {
+			v, err := tup.Get(uint64(i))
+			if err != nil {
+				return err
+			} else if v.Kind() != kinds[i] {
+				act := types.KindToString[v.Kind()]
+				exp := types.KindToString[kinds[i]]
+				cb(fmt.Sprintf("unexpected kind[%d] for key %s (%s != %s)",
+					i, k.HumanReadableString(), act, exp))
+			}
+		}
+
+		for i := range tags {
+			v, err := k.(types.Tuple).Get(uint64(i * 2))
+			if err != nil {
+				return err
+			} else if uint64(v.(types.Uint)) != tags[i] {
+				cb(fmt.Sprintf("unexpected tag[%d] for key %s (%d != %d)",
+					i, k.HumanReadableString(), uint64(v.(types.Uint)), tags[i]))
+			}
 		}
 
 		var less bool
@@ -138,6 +186,8 @@ func validateTableData(ctx context.Context, t *doltdb.Table, cb func(msg string)
 				k.HumanReadableString(), prev.HumanReadableString()))
 		}
 		prev = k
+		i++
 	}
+	cli.Printf("validated (%d) rows\n", i)
 	return nil
 }
