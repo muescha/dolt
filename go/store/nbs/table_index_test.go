@@ -65,7 +65,7 @@ func BenchmarkFindPrefix(b *testing.B) {
 	require.NoError(b, err)
 	prefixes := make([]uint64, 512)
 	for i := range prefixes {
-		prefixes[i] = tups.get(uint32(i)).prefix()
+		prefixes[i] = tups.tuple(uint32(i)).prefix()
 	}
 
 	b.Run("benchmark prefixIdx()", func(b *testing.B) {

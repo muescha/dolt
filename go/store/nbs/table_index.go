@@ -66,27 +66,6 @@ type tableIndex interface {
 	clone() (tableIndex, error)
 }
 
-type prefixArray []byte
-
-func (a prefixArray) get(i uint32) (t prefixTuple) {
-	copy(t[:], a[i*prefixTupleSize:(i+1)*prefixTupleSize])
-	return
-}
-
-func (a prefixArray) len() uint32 {
-	return uint32(len(a) / prefixTupleSize)
-}
-
-type prefixTuple [12]byte
-
-func (t prefixTuple) prefix() uint64 {
-	return binary.BigEndian.Uint64(t[:addrPrefixSize])
-}
-
-func (t prefixTuple) ordinal() uint32 {
-	return binary.BigEndian.Uint32(t[addrPrefixSize:])
-}
-
 func ReadTableFooter(rd io.ReadSeeker) (chunkCount uint32, totalUncompressedData uint64, err error) {
 	footerSize := int64(magicNumberSize + uint64Size + uint32Size)
 	_, err = rd.Seek(-footerSize, io.SeekEnd)

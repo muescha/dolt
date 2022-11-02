@@ -22,6 +22,7 @@
 package nbs
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -160,8 +161,9 @@ func (tr tableReader) hasMany(addrs []hasRecord) (bool, error) {
 		if addr.has {
 			continue
 		}
+		pre := hasRecordPrefixBytes(addr)
 
-		for filterIdx < filterLen && addr.prefix > tups.get(filterIdx).prefix() {
+		for filterIdx < filterLen && bytes.Compare(pre, tups.prefix(filterIdx)) > 0 {
 			filterIdx++
 		}
 
@@ -169,13 +171,13 @@ func (tr tableReader) hasMany(addrs []hasRecord) (bool, error) {
 			return true, nil
 		}
 
-		if addr.prefix != tups.get(filterIdx).prefix() {
+		if !bytes.Equal(pre, tups.prefix(filterIdx)) {
 			remaining = true
 			continue
 		}
 
 		// prefixes are equal, so locate and compare against the corresponding suffix
-		for j := filterIdx; j < filterLen && addr.prefix == tups.get(j).prefix(); j++ {
+		for j := filterIdx; j < filterLen && bytes.Equal(pre, tups.prefix(j)); j++ {
 			m, err := tr.idx.entrySuffixMatches(j, addr.a)
 			if err != nil {
 				return false, err
@@ -487,9 +489,10 @@ func (tr tableReader) findOffsets(reqs []getRecord) (ors offsetRecSlice, remaini
 		if req.found {
 			continue
 		}
+		pre := getRecordPrefixBytes(req)
 
 		// advance within the tups until we reach one which is >= req.prefix
-		for filterIdx < filterLen && req.prefix > tups.get(filterIdx).prefix() {
+		for filterIdx < filterLen && bytes.Compare(pre, tups.prefix(filterIdx)) > 0 {
 			filterIdx++
 		}
 
@@ -498,13 +501,13 @@ func (tr tableReader) findOffsets(reqs []getRecord) (ors offsetRecSlice, remaini
 			break
 		}
 
-		if req.prefix != tups.get(filterIdx).prefix() {
+		if !bytes.Equal(pre, tups.prefix(filterIdx)) {
 			remaining = true
 			continue
 		}
 
 		// record all offsets within the table which contain the data required.
-		for j := filterIdx; j < filterLen && req.prefix == tups.get(j).prefix(); j++ {
+		for j := filterIdx; j < filterLen && bytes.Equal(pre, tups.prefix(j)); j++ {
 			m, err := tr.idx.entrySuffixMatches(j, req.a)
 			if err != nil {
 				return nil, false, err

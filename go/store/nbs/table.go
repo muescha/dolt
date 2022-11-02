@@ -24,7 +24,6 @@ package nbs
 import (
 	"bytes"
 	"context"
-	"crypto/sha512"
 	"encoding/base32"
 	"encoding/binary"
 	"hash/crc32"
@@ -145,15 +144,6 @@ func crc(b []byte) uint32 {
 	return crc32.Update(0, crcTable, b)
 }
 
-func computeAddrDefault(data []byte) addr {
-	r := sha512.Sum512(data)
-	h := addr{}
-	copy(h[:], r[:addrSize])
-	return h
-}
-
-var computeAddr = computeAddrDefault
-
 type addr [addrSize]byte
 
 var encoding = base32.NewEncoding("0123456789abcdefghijklmnopqrstuv")
@@ -187,11 +177,45 @@ func (hs addrSlice) Len() int           { return len(hs) }
 func (hs addrSlice) Less(i, j int) bool { return bytes.Compare(hs[i][:], hs[j][:]) < 0 }
 func (hs addrSlice) Swap(i, j int)      { hs[i], hs[j] = hs[j], hs[i] }
 
+type prefixArray []byte
+
+func (a prefixArray) prefix(i uint32) addrPrefix {
+	o := i * prefixTupleSize
+	return addrPrefix(a[o : o+addrPrefixSize])
+}
+
+func (a prefixArray) tuple(i uint32) prefixTuple {
+	o := i * prefixTupleSize
+	return prefixTuple(a[o : o+prefixTupleSize])
+}
+
+func (a prefixArray) len() uint32 {
+	return uint32(len(a) / prefixTupleSize)
+}
+
+type addrPrefix []byte
+
+type prefixTuple []byte
+
+func (t prefixTuple) prefix() uint64 {
+	return binary.BigEndian.Uint64(t[:addrPrefixSize])
+}
+
+func (t prefixTuple) ordinal() uint32 {
+	return binary.BigEndian.Uint32(t[addrPrefixSize:])
+}
+
 type hasRecord struct {
 	a      *addr
 	prefix uint64
 	order  int
 	has    bool
+}
+
+func hasRecordPrefixBytes(hs hasRecord) (pre []byte) {
+	pre = make([]byte, addrPrefixSize)
+	binary.BigEndian.PutUint64(pre, hs.prefix)
+	return
 }
 
 type hasRecordByPrefix []hasRecord
@@ -210,6 +234,12 @@ type getRecord struct {
 	a      *addr
 	prefix uint64
 	found  bool
+}
+
+func getRecordPrefixBytes(gs getRecord) (pre []byte) {
+	pre = make([]byte, addrPrefixSize)
+	binary.BigEndian.PutUint64(pre, gs.prefix)
+	return
 }
 
 type getRecordByPrefix []getRecord

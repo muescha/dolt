@@ -23,8 +23,10 @@ package nbs
 
 import (
 	"context"
+	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"sort"
 	"testing"
 
@@ -35,6 +37,15 @@ import (
 	"github.com/dolthub/dolt/go/store/chunks"
 	"github.com/dolthub/dolt/go/store/hash"
 )
+
+func computeAddrDefault(data []byte) addr {
+	r := sha512.Sum512(data)
+	h := addr{}
+	copy(h[:], r[:addrSize])
+	return h
+}
+
+var computeAddr = computeAddrDefault
 
 func buildTable(chunks [][]byte) ([]byte, addr, error) {
 	totalData := uint64(0)
@@ -142,6 +153,65 @@ func TestHasMany(t *testing.T) {
 	for _, ha := range hasAddrs {
 		assert.True(ha.has, "Nothing for prefix %d", ha.prefix)
 	}
+}
+
+func BenchmarkHasMany(b *testing.B) {
+	const cnt = 64 * 1024
+	chnks := make([][]byte, cnt)
+	addrs := make(addrSlice, cnt)
+	hrecs := make([]hasRecord, cnt)
+	sparse := make([]hasRecord, cnt/1024)
+
+	data := make([]byte, cnt*16)
+	rand.Read(data)
+	for i := range chnks {
+		chnks[i] = data[i*16 : (i+1)*16]
+	}
+	for i := range addrs {
+		addrs[i] = computeAddr(chnks[i])
+	}
+	for i := range hrecs {
+		hrecs[i] = hasRecord{
+			a:      &addrs[i],
+			prefix: prefixOf(addrs[i]),
+			order:  i,
+		}
+	}
+	for i := range sparse {
+		j := i * 64
+		hrecs[i] = hasRecord{
+			a:      &addrs[j],
+			prefix: prefixOf(addrs[j]),
+			order:  j,
+		}
+	}
+	sort.Sort(hasRecordByPrefix(hrecs))
+	sort.Sort(hasRecordByPrefix(sparse))
+
+	tableData, _, err := buildTable(chnks)
+	require.NoError(b, err)
+	ti, err := parseTableIndexByCopy(tableData, &noopQuotaProvider{})
+	require.NoError(b, err)
+	tr, err := newTableReader(ti, tableReaderAtFromBytes(tableData), fileBlockSize)
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	b.Run("dense has many", func(b *testing.B) {
+		var ok bool
+		for i := 0; i < b.N; i++ {
+			ok, err = tr.hasMany(hrecs)
+		}
+		assert.False(b, ok)
+		assert.NoError(b, err)
+	})
+	b.Run("sparse has many", func(b *testing.B) {
+		var ok bool
+		for i := 0; i < b.N; i++ {
+			ok, err = tr.hasMany(sparse)
+		}
+		assert.True(b, ok)
+		assert.NoError(b, err)
+	})
 }
 
 func TestHasManySequentialPrefix(t *testing.T) {
@@ -411,4 +481,8 @@ func TestEmpty(t *testing.T) {
 	length, _, err := tw.finish()
 	require.NoError(t, err)
 	assert.True(length == footerSize)
+}
+
+func prefixOf(a addr) uint64 {
+	return binary.BigEndian.Uint64(a[:addrPrefixSize])
 }

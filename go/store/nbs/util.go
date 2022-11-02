@@ -87,7 +87,7 @@ func GetTableIndexPrefixes(rd io.ReadSeeker) (prefixes []uint64, err error) {
 
 	prefixes = make([]uint64, idx.chunkCount())
 	for i := range prefixes {
-		prefixes[i] = tups.get(uint32(i)).prefix()
+		prefixes[i] = tups.tuple(uint32(i)).prefix()
 	}
 	return
 }
