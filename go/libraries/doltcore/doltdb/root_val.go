@@ -1116,7 +1116,34 @@ func (root *RootValue) ValidateForeignKeysOnSchemas(ctx context.Context) (*RootV
 
 // RootNeedsUniqueTagsMigration determines if this root needs to be migrated to uniquify its tags.
 func RootNeedsUniqueTagsMigration(root *RootValue) (bool, error) {
-	return true, nil
+	ctx := context.Background()
+	tableNames, err := root.GetTableNames(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	seen := make(map[uint64]interface{})
+	for _, name := range tableNames {
+		t, ok, err := root.GetTable(ctx, name)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, fmt.Errorf("expected to find table by name")
+		}
+		sch, err := t.GetSchema(ctx)
+		if err != nil {
+			return false, err
+		}
+		for _, t := range sch.GetAllCols().Tags {
+			if _, ok := seen[t]; ok {
+				return true, nil
+			}
+			seen[t] = struct{}{}
+		}
+	}
+
+	return false, nil
 }
 
 // GetRootValueSuperSchema creates a SuperSchema with every column in history of root.
