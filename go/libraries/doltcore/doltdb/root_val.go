@@ -1116,14 +1116,7 @@ func (root *RootValue) ValidateForeignKeysOnSchemas(ctx context.Context) (*RootV
 
 // RootNeedsUniqueTagsMigration determines if this root needs to be migrated to uniquify its tags.
 func RootNeedsUniqueTagsMigration(root *RootValue) (bool, error) {
-	// SuperSchemas were added in the same update that required unique tags. If a root does not have a
-	// SuperSchema map then it was created before the unique tags constraint was enforced.
-	_, found, err := root.valueSt.MaybeGet(superSchemasKey)
-	if err != nil {
-		return false, err
-	}
-	needToMigrate := !found
-	return needToMigrate, nil
+	return true, nil
 }
 
 // GetRootValueSuperSchema creates a SuperSchema with every column in history of root.
