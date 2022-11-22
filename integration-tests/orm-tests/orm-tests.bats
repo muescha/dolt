@@ -55,7 +55,7 @@ teardown() {
   npx -c "prisma migrate dev --name init"
 }
 
-# Prisma is an ORM for Node/TypeScript applications. This test checks out the Peewee test suite
+# Prisma is an ORM for Node/TypeScript applications. This test checks out the Prisma test suite
 # and runs it against Dolt.
 @test "Prisma ORM test suite" {
   skip "Not implemented yet"
@@ -75,6 +75,28 @@ teardown() {
   cd typeorm
   npm install
   npm start
+}
+
+# MikroORM is an ORM for Node/TypeScript applications. This is a simple smoke test to make sure
+# Dolt can support the most basic MikroORM operations.
+@test "MikroORM smoke test" {
+  mysql --protocol TCP -u dolt -e "create database dolt;"
+
+  cd mikro-orm
+  npm install
+  npm start
+}
+
+# Hibernate is an ORM for Java applications using JDBC driver. This is a simple smoke test to make sure
+# Dolt can support the most basic Hibernate operations.
+@test "Hibernate smoke test" {
+  # need to create tables for it before running the test
+  mysql --protocol TCP -u dolt -e "create database dolt; use dolt; create table STUDENT (id INT NOT NULL auto_increment PRIMARY KEY, first_name VARCHAR(30) NOT NULL, last_name VARCHAR(30) NOT NULL, section VARCHAR(30) NOT NULL);"
+
+  cd hibernate/DoltHibernateSmokeTest
+  mvn clean install
+  mvn clean package
+  mvn exec:java
 }
 
 # Turn this test on to prevent the container from exiting if you need to exec a shell into
