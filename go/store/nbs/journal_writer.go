@@ -149,7 +149,7 @@ func (wr *journalWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-func (wr *journalWriter) bootstrapJournal(ctx context.Context) (last hash.Hash, cs chunkSource, err error) {
+func (wr *journalWriter) bootstrapJournal(ctx context.Context) (last hash.Hash, cs journalChunkSource, err error) {
 	// bootstrap chunk journal from |wr.file|
 	src := journalChunkSource{
 		journal: wr,
@@ -170,7 +170,7 @@ func (wr *journalWriter) bootstrapJournal(ctx context.Context) (last hash.Hash, 
 		return nil
 	})
 	if err != nil {
-		return hash.Hash{}, nil, err
+		return hash.Hash{}, journalChunkSource{}, err
 	}
 	cs = src
 	return

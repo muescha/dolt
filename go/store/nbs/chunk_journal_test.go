@@ -43,7 +43,7 @@ func TestChunkJournalBlockStoreSuite(t *testing.T) {
 			return nil, err
 		}
 		nbf := constants.FormatDefaultString
-		mm := makeManifestManager(m)
+		mm := makeManifestManager(j)
 		q := NewUnlimitedMemQuotaProvider()
 		c := inlineConjoiner{defaultMaxTables}
 		return newNomsBlockStore(ctx, nbf, mm, j, q, c, testMemTableSize)

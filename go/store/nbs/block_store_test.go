@@ -69,8 +69,7 @@ type nbsFactory func(ctx context.Context, dir string) (*NomsBlockStore, error)
 
 func (suite *BlockStoreSuite) SetupTest() {
 	var err error
-	suite.dir, err = os.MkdirTemp("", "")
-	suite.NoError(err)
+	suite.dir = suite.T().TempDir()
 	ctx := context.Background()
 	suite.store, err = suite.factory(ctx, suite.dir)
 	suite.NoError(err)
@@ -206,9 +205,9 @@ func (suite *BlockStoreSuite) TestChunkStorePutMoreThanMemTable() {
 	if suite.putCountFn != nil {
 		suite.Equal(2, suite.putCountFn())
 	}
-	specs, err := suite.store.tables.toSpecs()
+	sz, err := suite.store.tables.physicalLen()
 	suite.NoError(err)
-	suite.Len(specs, 2)
+	suite.True(sz > testMemTableSize)
 }
 
 func (suite *BlockStoreSuite) TestChunkStoreGetMany() {
