@@ -975,6 +975,13 @@ func (t *DoltTable) Projections() []string {
 	return names
 }
 
+func (t *DoltTable) ProjectedTags() []uint64 {
+	if len(t.projectedCols) > 0 {
+		return t.projectedCols
+	}
+	return t.sch.GetAllCols().Tags
+}
+
 // WithProjections implements sql.ProjectedTable
 func (t *DoltTable) WithProjections(colNames []string) sql.Table {
 	nt := *t
@@ -1335,17 +1342,40 @@ func (t *AlterableDoltTable) RewriteInserter(
 		// table to rewrite it we also truncate all the indexes. Much easier to get right.
 		for _, index := range oldSch.Indexes().AllIndexes() {
 			var colNames []string
-			for _, colName := range index.ColumnNames() {
+			prefixLengths := index.PrefixLengths()
+			for i, colName := range index.ColumnNames() {
 				if strings.ToLower(oldColumn.Name) == strings.ToLower(colName) {
 					colNames = append(colNames, newColumn.Name)
+					if len(prefixLengths) > 0 {
+						if !sql.IsText(newColumn.Type) {
+							// drop prefix lengths if column is not a string type
+							prefixLengths[i] = 0
+						} else if uint32(prefixLengths[i]) > newColumn.Type.MaxTextResponseByteLength() {
+							// drop prefix length if prefixLength is too long
+							prefixLengths[i] = 0
+						}
+					}
 				} else {
 					colNames = append(colNames, colName)
 				}
 			}
+
+			// check if prefixLengths should be dropped entirely
+			var nonZeroPrefixLength bool
+			for _, prefixLength := range prefixLengths {
+				if prefixLength > 0 {
+					nonZeroPrefixLength = true
+					break
+				}
+			}
+			if !nonZeroPrefixLength {
+				prefixLengths = nil
+			}
+
 			newSch.Indexes().AddIndexByColNames(
 				index.Name(),
 				colNames,
-				index.PrefixLengths(),
+				prefixLengths,
 				schema.IndexProperties{
 					IsUnique:      index.IsUnique(),
 					IsUserDefined: index.IsUserDefined(),

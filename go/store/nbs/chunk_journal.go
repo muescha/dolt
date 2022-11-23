@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -84,11 +85,7 @@ func newChunkJournal(ctx context.Context, dir string, m manifest) (*chunkJournal
 		return nil, err
 	}
 
-	a, err := cs.hash()
-	if err != nil {
-		return nil, err
-	}
-	sources := map[addr]chunkSource{a: cs}
+	sources := map[addr]chunkSource{cs.hash(): cs}
 
 	return &chunkJournal{
 		journal:  wr,
@@ -187,8 +184,13 @@ func (j *chunkJournal) Open(ctx context.Context, name addr, chunkCount uint32, s
 	return src, nil
 }
 
+// Exists checks if a table named |name| exists.
+func (j *chunkJournal) Exists(ctx context.Context, name addr, chunkCount uint32, stats *Stats) (bool, error) {
+	panic("unimplemented")
+}
+
 // PruneTableFiles implements tablePersister.
-func (j *chunkJournal) PruneTableFiles(ctx context.Context, contents manifestContents) error {
+func (j *chunkJournal) PruneTableFiles(ctx context.Context, contents manifestContents, mtime time.Time) error {
 	panic("unimplemented")
 }
 
@@ -386,8 +388,8 @@ func (s journalChunkSource) uncompressedLen() (uint64, error) {
 	return s.compressedSz, nil
 }
 
-func (s journalChunkSource) hash() (addr, error) {
-	return s.address, nil
+func (s journalChunkSource) hash() addr {
+	return s.address
 }
 
 // reader implements chunkSource.

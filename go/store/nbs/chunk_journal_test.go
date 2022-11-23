@@ -80,9 +80,7 @@ func TestChunkJournalPersist(t *testing.T) {
 			assert.Equal(t, ch.Data(), data)
 		}
 
-		name, err := source.hash()
-		assert.NoError(t, err)
-		cs, err := j.Open(ctx, name, 16, stats)
+		cs, err := j.Open(ctx, source.hash(), 16, stats)
 		assert.NotNil(t, cs)
 		assert.NoError(t, err)
 	}
