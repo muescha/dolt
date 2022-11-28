@@ -159,7 +159,7 @@ func (j *chunkJournal) PruneTableFiles(ctx context.Context, contents manifestCon
 
 // Name implements manifest.
 func (j *chunkJournal) Name() string {
-	return chunkJournalName
+	return j.journal.filepath()
 }
 
 // Update implements manifest.
@@ -174,6 +174,10 @@ func (j *chunkJournal) Update(ctx context.Context, lastLock addr, next manifestC
 		if err := writeHook(); err != nil {
 			return manifestContents{}, err
 		}
+	}
+
+	if emptyAddr(addr(next.root)) {
+		panic(next)
 	}
 
 	if err := j.journal.writeRootHash(next.root); err != nil {
@@ -203,14 +207,16 @@ func (j *chunkJournal) ParseIfExists(ctx context.Context, stats *Stats, readHook
 	return
 }
 
-func (j *chunkJournal) flushManifest() (err error) {
+func (j *chunkJournal) flushManifest() error {
 	ctx, s := context.Background(), &Stats{}
-	var last manifestContents
-	if _, last, err = j.backing.ParseIfExists(ctx, s, nil); err != nil {
-		return
+	_, last, err := j.backing.ParseIfExists(ctx, s, nil)
+	if err != nil {
+		return err
 	}
-	_, err = j.backing.Update(ctx, last.lock, j.contents, s, nil)
-	return
+	if !emptyAddr(j.contents.lock) {
+		_, err = j.backing.Update(ctx, last.lock, j.contents, s, nil)
+	}
+	return err
 }
 
 // Close implements io.Closer

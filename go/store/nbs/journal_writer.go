@@ -108,6 +108,10 @@ type journalWriter struct {
 var _ io.ReaderAt = &journalWriter{}
 var _ io.WriteCloser = &journalWriter{}
 
+func (wr *journalWriter) filepath() string {
+	return wr.path
+}
+
 func (wr *journalWriter) ReadAt(p []byte, off int64) (n int, err error) {
 	var bp []byte
 	if off < wr.off {

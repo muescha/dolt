@@ -417,29 +417,26 @@ func (ts tableSet) rebase(ctx context.Context, specs []tableSpec, stats *Stats) 
 
 func (ts tableSet) toSpecs() ([]tableSpec, error) {
 	tableSpecs := make([]tableSpec, 0, ts.Size())
-	for _, src := range ts.novel {
-		cnt, err := src.count()
-
-		if err != nil {
-			return nil, err
+	for a, src := range ts.novel {
+		if _, ok := ts.upstream[a]; ok {
+			continue
 		}
 
-		if cnt > 0 {
+		cnt, err := src.count()
+		if err != nil {
+			return nil, err
+		} else if cnt > 0 {
 			h := src.hash()
 			tableSpecs = append(tableSpecs, tableSpec{h, cnt})
 		}
 	}
 	for _, src := range ts.upstream {
 		cnt, err := src.count()
-
 		if err != nil {
 			return nil, err
-		}
-
-		if cnt <= 0 {
+		} else if cnt <= 0 {
 			return nil, errors.New("no upstream chunks")
 		}
-
 		h := src.hash()
 		tableSpecs = append(tableSpecs, tableSpec{h, cnt})
 	}
