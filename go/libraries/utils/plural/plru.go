@@ -34,6 +34,10 @@ type pseudoLRU struct {
 const (
 	all  uint64 = math.MaxUint64
 	none uint64 = 0
+
+	mod64mask  = uint64(64) - 1
+	div64shift = uint64(6)
+	mul64shift = div64shift
 )
 
 func newPseudoLRU(size uint64) *pseudoLRU {
@@ -45,13 +49,15 @@ func newPseudoLRU(size uint64) *pseudoLRU {
 
 // touch marks index |i| as recently used.
 func (p *pseudoLRU) touch(i uint64) {
-	bit := uint64(1 << (i % 64))
+	bit := uint64(1 << (i & mod64mask))
 	for { // spin until we set the bit
-		b := atomic.LoadUint64(&p.blocks[i/64])
-		if atomic.CompareAndSwapUint64(&p.blocks[i/64], b, b|bit) {
-			return
+		block := atomic.LoadUint64(&p.blocks[i>>div64shift])
+		if atomic.CompareAndSwapUint64(&p.blocks[i>>div64shift], block, block|bit) {
+			break
 		}
 	}
+	// maintain invariant that not all bits are set
+	atomic.CompareAndSwapUint64(&p.blocks[i>>div64shift], all, bit)
 }
 
 // evict returns a not-recently-used index |i|.
@@ -59,15 +65,12 @@ func (p *pseudoLRU) evict() (i uint64) {
 	// round-robin to pick eviction block
 	j := atomic.AddUint64(&p.cursor, 1)
 	j = j % uint64(len(p.blocks)) // wrap cursor
-
-	b := atomic.LoadUint64(&p.blocks[j])
+	block := atomic.LoadUint64(&p.blocks[j])
 	// evict first unset bit in |b|,
 	// modulo 64 returns 0th bit in the
 	// case where all bits in |b| are set
-	k := uint64(bits.TrailingZeros64(^b) % 64)
-	i = k + (j * 64)
-
-	// maintain invariant that not all bits are set
-	atomic.CompareAndSwapUint64(&p.blocks[j], all, none)
+	k := uint64(bits.TrailingZeros64(^block)) & mod64mask
+	i = k + (j << mul64shift)
+	p.touch(i)
 	return
 }
