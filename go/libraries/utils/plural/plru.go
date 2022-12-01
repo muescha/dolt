@@ -40,13 +40,6 @@ const (
 	mul64shift = div64shift
 )
 
-func newPseudoLRU(size uint64) *pseudoLRU {
-	if size%64 != 0 {
-		panic("size must be multiple of 64")
-	}
-	return &pseudoLRU{blocks: make([]uint64, size/64)}
-}
-
 // touch marks index |i| as recently used.
 func (p *pseudoLRU) touch(i uint64) {
 	bit := uint64(1 << (i & mod64mask))
