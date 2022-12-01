@@ -1,0 +1,73 @@
+// Copyright 2022 Dolthub, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plural
+
+import (
+	"math"
+	"math/bits"
+	"sync/atomic"
+)
+
+// pseudoLRU is lock-free Least-Recently-Used approximation.
+//
+// Adapted from rust implementation (https://docs.rs/plru/latest/plru)
+// Originally published by Sun Microsystems (US patent 5,353,425).
+// Algorithm described in detail as "PLRUm" by Al-Zoubi et al:
+// (https://dl.acm.org/doi/10.1145/986537.986601)
+type pseudoLRU struct {
+	blocks []uint64
+	cursor uint64
+}
+
+const (
+	all  uint64 = math.MaxUint64
+	none uint64 = 0
+)
+
+func newPseudoLRU(size uint64) *pseudoLRU {
+	if size%64 != 0 {
+		panic("size must be multiple of 64")
+	}
+	return &pseudoLRU{blocks: make([]uint64, size/64)}
+}
+
+// touch marks index |i| as recently used.
+func (p *pseudoLRU) touch(i uint64) {
+	bit := uint64(1 << (i % 64))
+	for { // spin until we set the bit
+		b := atomic.LoadUint64(&p.blocks[i/64])
+		if atomic.CompareAndSwapUint64(&p.blocks[i/64], b, b|bit) {
+			return
+		}
+	}
+}
+
+// evict returns a not-recently-used index |i|.
+func (p *pseudoLRU) evict() (i uint64) {
+	// round-robin to pick eviction block
+	j := atomic.AddUint64(&p.cursor, 1)
+	j = j % uint64(len(p.blocks)) // wrap cursor
+
+	b := atomic.LoadUint64(&p.blocks[j])
+	// evict first unset bit in |b|,
+	// modulo 64 returns 0th bit in the
+	// case where all bits in |b| are set
+	k := uint64(bits.TrailingZeros64(^b) % 64)
+	i = k + (j * 64)
+
+	// maintain invariant that not all bits are set
+	atomic.CompareAndSwapUint64(&p.blocks[j], all, none)
+	return
+}
