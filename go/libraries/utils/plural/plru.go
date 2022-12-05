@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 )
 
-// pseudoLRU is lock-free Least-Recently-Used approximation.
+// pseudoLRU is a lock-free Least-Recently-Used approximation.
 //
 // Adapted from rust implementation (https://docs.rs/plru/latest/plru)
 // Originally published by Sun Microsystems (US patent 5,353,425).
@@ -66,4 +66,8 @@ func (p *pseudoLRU) evict() (i uint64) {
 	i = k + (j << mul64shift)
 	p.touch(i)
 	return
+}
+
+func (p *pseudoLRU) capacity() uint64 {
+	return uint64(len(p.blocks)) << mul64shift
 }

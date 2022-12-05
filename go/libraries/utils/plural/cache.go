@@ -17,57 +17,81 @@ package plural
 import "sync"
 
 type Cache[K comparable, V any] struct {
-	keys    map[K]uint64
-	entries []entry[K, V]
-	lru     pseudoLRU
-	mu      sync.RWMutex
+	elems map[K]entry[V]
+	keys  []K
+	lru   pseudoLRU
+	cb    EvictFn[K, V]
+	lock  sync.RWMutex
 }
 
-type entry[K comparable, V any] struct {
-	key   K
+type EvictFn[K comparable, V any] func(key K, value V)
+
+type entry[V any] struct {
 	value V
+	idx   uint64
 }
 
-func NewCache[K comparable, V any](sz uint64) *Cache[K, V] {
+// NewCache returns a cache with capacity of at least |sz|.
+func NewCache[K comparable, V any](sz uint64, cb EvictFn[K, V]) *Cache[K, V] {
 	sz = nextMultiple(sz)
 	lru := pseudoLRU{
 		blocks: make([]uint64, sz/64),
 	}
+	if cb == nil {
+		cb = func(K, V) {}
+	}
 	return &Cache[K, V]{
-		keys:    make(map[K]uint64, sz),
-		entries: make([]entry[K, V], sz),
-		lru:     lru,
+		elems: make(map[K]entry[V], sz),
+		keys:  make([]K, sz),
+		cb:    cb,
+		lru:   lru,
 	}
 }
 
 func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	var idx uint64
-	idx, ok = c.keys[key]
-	if ok {
-		value = c.entries[idx].value
-		c.lru.touch(idx)
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	var e entry[V]
+	if e, ok = c.elems[key]; ok {
+		value = e.value
+		c.lru.touch(e.idx)
 	}
 	return
 }
 
 func (c *Cache[K, V]) Put(key K, value V) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	idx := c.lru.evict()
-	prev := c.entries[idx]
-	delete(c.keys, prev.key)
-	c.entries[idx] = entry[K, V]{
-		key:   key,
-		value: value,
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if e, ok := c.elems[key]; ok {
+		// update |e| in-place
+		e.value = value
+		c.elems[key] = e
+		c.lru.touch(e.idx)
+		return
 	}
-	c.keys[key] = idx
+	idx := c.lru.evict()
+	victim := c.keys[idx]
+	e, ok := c.elems[victim]
+	// check |e.idx| in case
+	// |victim| is zero-valued
+	if ok && e.idx == idx {
+		c.cb(victim, e.value)
+		delete(c.elems, victim)
+	}
+	c.elems[key] = entry[V]{
+		value: value,
+		idx:   idx,
+	}
+	c.keys[idx] = key
+}
+
+func (c *Cache[K, V]) Capacity() int {
+	return int(c.lru.capacity())
 }
 
 func (c *Cache[K, V]) Count() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	return len(c.keys)
 }
 
