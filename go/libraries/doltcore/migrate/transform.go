@@ -65,12 +65,12 @@ func migrateWorkingSet(ctx context.Context, menv Environment, brRef ref.BranchRe
 		return err
 	}
 
-	wr, err := migrateRoot(ctx, menv, oldHeadRoot, oldWs.WorkingRoot(), newHeadRoot)
+	wr, err := migrateRoot(ctx, menv, oldHeadRoot, oldWs.WorkingRoot(), newHeadRoot, false)
 	if err != nil {
 		return err
 	}
 
-	sr, err := migrateRoot(ctx, menv, oldHeadRoot, oldWs.StagedRoot(), newHeadRoot)
+	sr, err := migrateRoot(ctx, menv, oldHeadRoot, oldWs.StagedRoot(), newHeadRoot, false)
 	if err != nil {
 		return err
 	}
@@ -123,6 +123,7 @@ func migrateCommit(ctx context.Context, menv Environment, oldCm *doltdb.Commit, 
 	if err != nil {
 		return err
 	}
+	isMergeCm := oldCm.NumParents() > 1
 
 	oph, err := oldParentCm.HashOf()
 	if err != nil {
@@ -148,7 +149,7 @@ func migrateCommit(ctx context.Context, menv Environment, oldCm *doltdb.Commit, 
 		return err
 	}
 
-	mRoot, err := migrateRoot(ctx, menv, oldParentRoot, oldRoot, newParentRoot)
+	mRoot, err := migrateRoot(ctx, menv, oldParentRoot, oldRoot, newParentRoot, isMergeCm)
 	if err != nil {
 		return err
 	}
@@ -266,7 +267,7 @@ func migrateCommitOptions(ctx context.Context, oldCm *doltdb.Commit, prog Progre
 	}, nil
 }
 
-func migrateRoot(ctx context.Context, menv Environment, oldParent, oldRoot, newParent *doltdb.RootValue) (*doltdb.RootValue, error) {
+func migrateRoot(ctx context.Context, menv Environment, oldParent, oldRoot, newParent *doltdb.RootValue, isMergeCm bool) (*doltdb.RootValue, error) {
 	migrated := newParent
 
 	fkc, err := oldRoot.GetForeignKeyCollection(ctx)
@@ -319,7 +320,7 @@ func migrateRoot(ctx context.Context, menv Environment, oldParent, oldRoot, newP
 				return true, err
 			}
 		}
-		if !ok || !schema.SchemasAreEqual(sch, parentSch) {
+		if !ok || !schema.SchemasAreEqual(sch, parentSch) || isMergeCm {
 			// provide empty table to diff against
 			oldParentTbl, err = doltdb.NewEmptyTable(ctx, oldParent.VRW(), oldParent.NodeStore(), sch)
 			if err != nil {
@@ -331,7 +332,7 @@ func migrateRoot(ctx context.Context, menv Environment, oldParent, oldRoot, newP
 		if err != nil {
 			return true, err
 		}
-		if !ok || !schema.SchemasAreEqual(sch, parentSch) {
+		if !ok || !schema.SchemasAreEqual(sch, parentSch) || isMergeCm {
 			// provide empty table to diff against
 			newParentTbl, err = doltdb.NewEmptyTable(ctx, newParent.VRW(), newParent.NodeStore(), newSch)
 			if err != nil {
