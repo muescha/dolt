@@ -17,6 +17,8 @@ package plural
 import (
 	"math"
 	"math/rand"
+	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -128,6 +130,27 @@ func TestPseudoLRU(t *testing.T) {
 			assert.Equal(t, test.final, lru.blocks[0])
 		})
 	}
+}
+
+func TestConcurrentPLRU(t *testing.T) {
+	sz := 64 * 64
+	lru := &pseudoLRU{
+		blocks: make([]uint64, sz/64),
+	}
+
+	n := runtime.NumCPU()
+	wg := new(sync.WaitGroup)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			for j := 0; j < sz*1024; j++ {
+				x := lru.evict()
+				assert.True(t, int(x) < sz)
+			}
+			wg.Done()
+		}()
+	}
+	wg.Wait()
 }
 
 func TestBitMath(t *testing.T) {
