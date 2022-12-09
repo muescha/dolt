@@ -43,21 +43,6 @@ func TestCacheUnderCapacity(t *testing.T) {
 	}
 }
 
-func TestCacheConcurrent(t *testing.T) {
-	sizes := []uint64{64, 512, 4096, 32768}
-	for _, sz := range sizes {
-		t.Run(fmt.Sprintf("float64 cache_size=%d", sz), func(t *testing.T) {
-			testCacheConcurrent(t, sz, genFloatData)
-		})
-		t.Run(fmt.Sprintf("int cache_size=%d", sz), func(t *testing.T) {
-			testCacheConcurrent(t, sz, genIntData)
-		})
-		t.Run(fmt.Sprintf("string cache_size=%d", sz), func(t *testing.T) {
-			testCacheConcurrent(t, sz, genStringData)
-		})
-	}
-}
-
 func TestCacheOverCapacity(t *testing.T) {
 	sizes := []uint64{64, 512, 4096, 32768}
 	for _, sz := range sizes {
@@ -69,6 +54,36 @@ func TestCacheOverCapacity(t *testing.T) {
 		})
 		t.Run(fmt.Sprintf("string cache_size=%d", sz), func(t *testing.T) {
 			testCacheOverCapacity(t, sz, genStringData)
+		})
+	}
+}
+
+func TestCacheUnderCapacityConcurrent(t *testing.T) {
+	sizes := []uint64{64, 512, 4096, 32768}
+	for _, sz := range sizes {
+		t.Run(fmt.Sprintf("float64 cache_size=%d", sz), func(t *testing.T) {
+			testCacheUnderCapacityConcurrent(t, sz, genFloatData)
+		})
+		t.Run(fmt.Sprintf("int cache_size=%d", sz), func(t *testing.T) {
+			testCacheUnderCapacityConcurrent(t, sz, genIntData)
+		})
+		t.Run(fmt.Sprintf("string cache_size=%d", sz), func(t *testing.T) {
+			testCacheUnderCapacityConcurrent(t, sz, genStringData)
+		})
+	}
+}
+
+func TestCacheOverCapacityConcurrent(t *testing.T) {
+	sizes := []uint64{64, 512, 4096, 32768}
+	for _, sz := range sizes {
+		t.Run(fmt.Sprintf("float64 cache_size=%d", sz), func(t *testing.T) {
+			testCacheOverCapacityConcurrent(t, sz, genFloatData)
+		})
+		t.Run(fmt.Sprintf("int cache_size=%d", sz), func(t *testing.T) {
+			testCacheOverCapacityConcurrent(t, sz, genIntData)
+		})
+		t.Run(fmt.Sprintf("string cache_size=%d", sz), func(t *testing.T) {
+			testCacheOverCapacityConcurrent(t, sz, genStringData)
 		})
 	}
 }
@@ -113,7 +128,36 @@ func testCacheOverCapacity[K comparable, V any](t *testing.T, sz uint64, gen gen
 	assert.Equal(t, cache.Count(), cache.Capacity())
 }
 
-func testCacheConcurrent[K comparable, V any](t *testing.T, sz uint64, gen generator[K, V]) {
+func testCacheUnderCapacityConcurrent[K comparable, V any](t *testing.T, sz uint64, gen generator[K, V]) {
+	data := gen(int(sz))
+	cache := NewCache(sz, func(K, V) {})
+	keys := make([]K, 0, sz)
+	for k, v := range data {
+		cache.Put(k, v)
+		keys = append(keys, k)
+	}
+	for i := range keys {
+		_, ok := cache.Get(keys[i])
+		assert.True(t, ok)
+	}
+
+	const trials = 1024 * 1024
+	n := runtime.NumCPU()
+	wg := new(sync.WaitGroup)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			for j := 0; j < trials; j++ {
+				_, ok := cache.Get(keys[j%int(sz)])
+				assert.True(t, ok)
+			}
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+}
+
+func testCacheOverCapacityConcurrent[K comparable, V any](t *testing.T, sz uint64, gen generator[K, V]) {
 	evicted := newSyncMap[K, V]()
 	cache := NewCache[K, V](sz, func(k K, v V) {
 		evicted.Put(k, v)
