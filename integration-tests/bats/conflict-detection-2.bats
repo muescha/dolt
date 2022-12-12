@@ -555,13 +555,13 @@ SQL
     dolt checkout main
 
     run dolt sql <<"SQL"
-SELECT DOLT_MERGE('other');
+call dolt_merge('other');
 SQL
     [ "$status" -eq "1" ]
     [[ "$output" =~ "conflicts" ]] || false
     run dolt sql <<"SQL"
 SET dolt_allow_commit_conflicts = 1;
-SELECT DOLT_MERGE('other');
+call dolt_merge('other');
 SQL
     [ "$status" -eq "0" ]
     [[ ! "$output" =~ "conflicts" ]] || false

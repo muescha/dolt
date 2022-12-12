@@ -181,7 +181,7 @@ teardown() {
     dolt config --local --add sqlserver.global.dolt_replicate_heads main,new_feature
     start_sql_server repo2
 
-    run dolt sql-client --use-db repo2 -P $PORT -u dolt -q "select dolt_checkout('new_feature') as b"
+    run dolt sql-client --use-db repo2 -P $PORT -u dolt -q "call dolt_checkout('new_feature') as b"
     [ $status -eq 0 ]
     [[ "$output" =~ "b" ]] || false
     [[ "$output" =~ "0" ]] || false
@@ -238,7 +238,7 @@ teardown() {
 
     # Creating a branch locally that doesn't exist on the remote
     # works, but connecting to it is an error (nothing to pull)
-    dolt sql-client --use-db "repo2/new_feature" -u dolt -P $PORT -q "select dolt_checkout('-b', 'new_branch')"
+    dolt sql-client --use-db "repo2/new_feature" -u dolt -P $PORT -q "call dolt_checkout('-b', 'new_branch')"
 
     run dolt sql-client --use-db "repo2/new_branch" -u dolt -P $PORT -q "show tables"
     [ $status -ne 0 ]

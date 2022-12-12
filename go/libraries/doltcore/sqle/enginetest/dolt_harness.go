@@ -447,7 +447,7 @@ func (d *DoltHarness) SnapshotTable(db sql.VersionedDatabase, name string, asOf 
 	_, iter, err := e.Query(ctx,
 		"CALL DOLT_ADD('.')")
 	_, iter, err = e.Query(ctx,
-		"SELECT COMMIT('-am', 'test commit');")
+		"CALL DOLT_COMMIT('-am', 'test commit');")
 	require.NoError(d.t, err)
 	_, err = sql.RowIterToRows(ctx, nil, iter)
 	require.NoError(d.t, err)
