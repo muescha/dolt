@@ -24,6 +24,7 @@ package nbs
 import (
 	"context"
 	"fmt"
+	"github.com/fatih/color"
 	"io"
 	"os"
 	"path/filepath"
@@ -895,6 +896,9 @@ func (nbs *NomsBlockStore) Commit(ctx context.Context, current, last hash.Hash) 
 	t1 := time.Now()
 	defer nbs.stats.CommitLatency.SampleTimeSince(t1)
 
+	fmt.Println("DUSTIN: getting here")
+	fmt.Fprintln(color.Output, "DUSTIN: getting here color")
+
 	anyPossiblyNovelChunks := func() bool {
 		nbs.mu.Lock()
 		defer nbs.mu.Unlock()
@@ -905,6 +909,7 @@ func (nbs *NomsBlockStore) Commit(ctx context.Context, current, last hash.Hash) 
 		err := nbs.Rebase(ctx)
 
 		if err != nil {
+			fmt.Fprintln(color.Output, "DUSTIN: nbs.Rebase error:", err.Error())
 			return false, err
 		}
 
@@ -942,6 +947,7 @@ func (nbs *NomsBlockStore) Commit(ctx context.Context, current, last hash.Hash) 
 	}()
 
 	if err != nil {
+		fmt.Fprintln(color.Output, "DUSTIN: nbs.tables.append error:", err.Error())
 		return false, err
 	}
 
@@ -951,6 +957,9 @@ func (nbs *NomsBlockStore) Commit(ctx context.Context, current, last hash.Hash) 
 
 		if err == nil {
 			err = unlockErr
+			if unlockErr != nil {
+				fmt.Fprintln(color.Output, "DUSTIN: unlockErr error:", unlockErr.Error())
+			}
 		}
 	}()
 
@@ -962,6 +971,7 @@ func (nbs *NomsBlockStore) Commit(ctx context.Context, current, last hash.Hash) 
 		} else if err == errOptimisticLockFailedRoot || err == errLastRootMismatch {
 			return false, nil
 		} else if err != errOptimisticLockFailedTables {
+			fmt.Fprintln(color.Output, "DUSTIN: nbs.updateManifest error:", err.Error())
 			return false, err
 		}
 

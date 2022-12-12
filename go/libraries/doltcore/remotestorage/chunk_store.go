@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/fatih/color"
 	"io"
 	"net/http"
 	"net/url"
@@ -854,6 +855,7 @@ func (dcs *DoltChunkStore) Commit(ctx context.Context, current, last hash.Hash) 
 	hashToChunkCount, err := dcs.uploadChunks(ctx)
 
 	if err != nil {
+		fmt.Fprintln(color.Output, "DUSTIN: dcs.uploadChunks error:", err.Error())
 		return false, err
 	}
 
@@ -876,6 +878,7 @@ func (dcs *DoltChunkStore) Commit(ctx context.Context, current, last hash.Hash) 
 	}
 	resp, err := dcs.csClient.Commit(ctx, req)
 	if err != nil {
+		fmt.Fprintln(color.Output, "DUSTIN: dcs.csClient.Commit error:", err.Error())
 		return false, NewRpcError(err, "Commit", dcs.host, req)
 	}
 
