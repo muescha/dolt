@@ -16,12 +16,17 @@ package maphash
 
 type Hasher[K comparable] struct {
 	m map[K]struct{}
+	k *K
 }
 
 func NewHasher[K comparable]() Hasher[K] {
-	return Hasher[K]{m: make(map[K]struct{})}
+	return Hasher[K]{
+		m: make(map[K]struct{}),
+		k: new(K),
+	}
 }
 
 func (h Hasher[K]) Hash(key K) uint64 {
-	return uint64(runtimeHash(key, h.m))
+	*h.k = key
+	return uint64(runtimeHash(h.k, h.m))
 }

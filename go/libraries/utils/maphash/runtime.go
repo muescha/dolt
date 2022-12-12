@@ -16,9 +16,9 @@ package maphash
 
 import "unsafe"
 
-func runtimeHash[K comparable](key K, m interface{}) uintptr {
+func runtimeHash[K comparable](key *K, m any) uintptr {
 	g := (*mapiface)(unsafe.Pointer(&m))
-	return g.typ.hasher(unsafe.Pointer(&key), uintptr(g.val.hash0))
+	return g.typ.hasher(unsafe.Pointer(key), uintptr(g.val.hash0))
 }
 
 func runtimeKeySize(m interface{}) uint8 {
@@ -56,7 +56,8 @@ type hmap struct {
 	buckets    unsafe.Pointer
 	oldbuckets unsafe.Pointer
 	nevacuate  uintptr
-	// extra *mapextra
+	// true type is *mapextra
+	// but we don't need this data
 	extra unsafe.Pointer
 }
 

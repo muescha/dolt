@@ -15,8 +15,11 @@
 package maphash
 
 import (
+	gohash "hash/maphash"
 	"math"
+	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -153,4 +156,81 @@ func TestKeysize(t *testing.T) {
 
 func (h Hasher[K]) keySize() uint8 {
 	return runtimeKeySize(h.m)
+}
+
+func TestNoAllocs(t *testing.T) {
+	t.Run("int", func(t *testing.T) {
+		testNoAllocs(t, NewHasher[int](), 42)
+	})
+	t.Run("uint", func(t *testing.T) {
+		testNoAllocs(t, NewHasher[uint](), 42)
+	})
+	t.Run("float", func(t *testing.T) {
+		testNoAllocs(t, NewHasher[float64](), math.E)
+	})
+	t.Run("string", func(t *testing.T) {
+		testNoAllocs(t, NewHasher[string](), "asdf")
+	})
+	type uuid [16]byte
+	t.Run("uuid", func(t *testing.T) {
+		testNoAllocs(t, NewHasher[uuid](), uuid{})
+	})
+	t.Run("time", func(t *testing.T) {
+		testNoAllocs(t, NewHasher[time.Time](), time.Now())
+	})
+}
+
+func testNoAllocs[K comparable](t *testing.T, h Hasher[K], key K) {
+	a := testing.AllocsPerRun(64, func() {
+		h.Hash(key)
+	})
+	assert.Equal(t, 0.0, a)
+}
+
+func BenchmarkUint64Hasher(b *testing.B) {
+	h := NewHasher[uint64]()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h.Hash(uint64(i))
+	}
+	b.ReportAllocs()
+}
+
+func BenchmarkCompareStringHasher(b *testing.B) {
+	h := NewHasher[string]()
+	seed := gohash.MakeSeed()
+	const cnt uint64 = 4096
+	const mod uint64 = 4096 - 1
+	data := genStringData(cnt, 16)
+	b.ResetTimer()
+
+	b.Run("string hasher", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			h.Hash(data[uint64(i)&mod])
+		}
+		b.ReportAllocs()
+	})
+	b.Run("std string hasher", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			gohash.String(seed, data[uint64(i)&mod])
+		}
+		b.ReportAllocs()
+	})
+}
+
+var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func genStringData(cnt, ln uint64) (data []string) {
+	str := func(n uint64) string {
+		s := make([]rune, n)
+		for i := range s {
+			s[i] = letters[rand.Intn(52)]
+		}
+		return string(s)
+	}
+	data = make([]string, cnt)
+	for i := range data {
+		data[i] = str(ln)
+	}
+	return
 }
