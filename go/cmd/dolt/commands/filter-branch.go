@@ -226,7 +226,7 @@ func processFilterQuery(ctx context.Context, dEnv *env.DoltEnv, cm *doltdb.Commi
 		return nil, fmt.Errorf("SQL statement not supported for filter-branch: '%s'", query)
 	}
 
-	err, ok := captureTblNotFoundErr(err, mt, rh)
+	err, ok := captureNotFoundErrors(err, mt, rh)
 	if ok {
 		// table doesn't exist, save the error and continue
 		return root, nil
@@ -339,9 +339,12 @@ func rebaseSqlEngine(ctx context.Context, dEnv *env.DoltEnv, cm *doltdb.Commit) 
 	return sqlCtx, se, nil
 }
 
-func captureTblNotFoundErr(e error, mt missingTbls, h hash.Hash) (error, bool) {
+func captureNotFoundErrors(e error, mt missingTbls, h hash.Hash) (error, bool) {
 	if sql.ErrTableNotFound.Is(e) {
 		mt[h] = e.(*errors.Error)
+		return nil, true
+	}
+	if e != nil && strings.Contains(e.Error(), "check that column/key exists") {
 		return nil, true
 	}
 	return e, false
