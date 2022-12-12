@@ -16,14 +16,27 @@ package maphash
 
 import "unsafe"
 
-func runtimeHash[K comparable](key *K, m any) uintptr {
+func runtimeHash(key unsafe.Pointer, m any) uintptr {
 	g := (*mapiface)(unsafe.Pointer(&m))
-	return g.typ.hasher(unsafe.Pointer(key), uintptr(g.val.hash0))
+	return g.typ.hasher(key, uintptr(g.val.hash0))
 }
 
 func runtimeKeySize(m interface{}) uint8 {
 	g := (*mapiface)(unsafe.Pointer(&m))
 	return g.typ.keysize
+}
+
+// noescape hides a pointer from escape analysis. It is the identity function
+// but escape analysis doesn't think the output depends on the input.
+// noescape is inlined and currently compiles down to zero instructions.
+// USE CAREFULLY!
+// This was copied from the runtime (via pkg "strings"); see issues 23382 and 7921.
+//
+//go:nosplit
+//go:nocheckptr
+func noescape(p unsafe.Pointer) unsafe.Pointer {
+	x := uintptr(p)
+	return unsafe.Pointer(x ^ 0)
 }
 
 type mapiface struct {

@@ -14,19 +14,17 @@
 
 package maphash
 
+import "unsafe"
+
 type Hasher[K comparable] struct {
 	m map[K]struct{}
-	k *K
 }
 
 func NewHasher[K comparable]() Hasher[K] {
-	return Hasher[K]{
-		m: make(map[K]struct{}),
-		k: new(K),
-	}
+	return Hasher[K]{m: make(map[K]struct{})}
 }
 
 func (h Hasher[K]) Hash(key K) uint64 {
-	*h.k = key
-	return uint64(runtimeHash(h.k, h.m))
+	p := noescape(unsafe.Pointer(&key))
+	return uint64(runtimeHash(p, h.m))
 }
