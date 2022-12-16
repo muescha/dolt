@@ -23,8 +23,11 @@ package nbs
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"github.com/fatih/color"
 	"io"
 	"sort"
 	"sync/atomic"
@@ -59,6 +62,8 @@ func NewCompressedChunk(h hash.Hash, buff []byte) (CompressedChunk, error) {
 	compressedData := buff[:dataLen]
 
 	if chksum != crc(compressedData) {
+		fmt.Fprintf(color.Output, "NewCompressedChunk: checksum error: hash: %s\n", h.String())
+		fmt.Fprintf(color.Output, "NewCompressedChunk: encoded chunk contents: %s\n", base64.StdEncoding.EncodeToString(buff))
 		return CompressedChunk{}, errors.New("checksum error")
 	}
 

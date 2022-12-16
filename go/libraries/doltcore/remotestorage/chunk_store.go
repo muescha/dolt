@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/fatih/color"
 	"io"
 	"net/http"
 	"net/url"
@@ -435,6 +436,9 @@ func (gr *GetRange) GetDownloadFunc(ctx context.Context, stats StatsRecorder, fe
 		var comprData []byte
 		var err error
 		rangeLen := gr.RangeLen()
+
+		fmt.Fprintf(color.Output, "GetDownloadFunc: get range length: %d\n", gr.RangeLen())
+
 		if rangeLen > HedgeDownloadSizeLimit {
 			comprData, err = rangeDownloadWithRetries(ctx, stats, fetcher, gr.ChunkStartOffset(0), rangeLen, 1, urlF)
 		} else {
@@ -443,13 +447,21 @@ func (gr *GetRange) GetDownloadFunc(ctx context.Context, stats StatsRecorder, fe
 		if err != nil {
 			return err
 		}
+
+		fmt.Fprintf(color.Output, "GetDownloadFunc: total size of compressed data: %d\n", len(comprData))
+
 		// Send the chunk for each range included in GetRange.
 		for i := 0; i < len(gr.Ranges); i++ {
 			s, e := gr.ChunkByteRange(i)
+
+			fmt.Fprintf(color.Output, "GetDownloadFunc: start: %d end: %d index: %d\n", s, e, i)
+
 			cmpChnk, err := nbs.NewCompressedChunk(hash.New(gr.Ranges[i].Hash), comprData[s:e])
 			if err != nil {
 				return err
 			}
+
+			fmt.Fprintf(color.Output, "GetDownloadFunc: chunk hash %s\n", hash.New(gr.Ranges[i].Hash).String())
 			select {
 			case chunkChan <- cmpChnk:
 			case <-ctx.Done():
@@ -586,6 +598,8 @@ func (dcs *DoltChunkStore) getDLLocs(ctx context.Context, hashes []hash.Hash) (d
 			// Write requests
 			seg.Go(func() error {
 				for i := range reqs {
+					fmt.Fprintf(color.Output, "getDLLocs: request: %+v\n", reqs[i])
+
 					if err := stream.Send(reqs[i]); err != nil {
 						return NewRpcError(err, "StreamDownloadLocations", dcs.host, reqs[i])
 					}
@@ -606,6 +620,9 @@ func (dcs *DoltChunkStore) getDLLocs(ctx context.Context, hashes []hash.Hash) (d
 						}
 						return NewRpcError(err, "StreamDownloadLocations", dcs.host, r)
 					}
+
+					fmt.Fprintf(color.Output, "getDLLocs: response: %+v\n", resp)
+
 					if resp.RepoToken != "" {
 						dcs.repoToken.Store(resp.RepoToken)
 					}
@@ -1179,6 +1196,8 @@ func rangeDownloadWithRetries(ctx context.Context, stats StatsRecorder, fetcher 
 			lastError = rerr
 			retryCnt += 1
 		}()
+		fmt.Fprintf(color.Output, "rangeDownloadWithRetries: retry count: %d\n", retryCnt)
+
 		urlStr, err := urlStrF(lastError)
 		if err != nil {
 			return err
@@ -1194,12 +1213,15 @@ func rangeDownloadWithRetries(ctx context.Context, stats StatsRecorder, fetcher 
 
 		stats.RecordDownloadAttemptStart(hedgeN, retryCnt, currOffset-offset, length)
 		start := time.Now()
+
+		fmt.Fprintf(color.Output, "rangeDownloadWithRetries: request headers: %+v\n", req.Header)
 		resp, err := fetcher.Do(req.WithContext(ctx))
 		if err == nil {
 			defer func() {
 				_ = resp.Body.Close()
 			}()
 		}
+		fmt.Fprintf(color.Output, "rangeDownloadWithRetries: response headers: %+v\n", resp.Header)
 
 		respErr := processHttpResp(resp, err)
 		if respErr != nil {
@@ -1209,8 +1231,9 @@ func rangeDownloadWithRetries(ctx context.Context, stats StatsRecorder, fetcher 
 
 		// read the results
 		comprData, err := iohelp.ReadWithMinThroughput(resp.Body, int64(currLength), downThroughputCheck)
-
 		dataRead := len(comprData)
+
+		fmt.Fprintf(color.Output, "rangeDownloadWithRetries: compressed data: %d\n", dataRead)
 		if dataRead > 0 {
 			allBufs = append(allBufs, comprData)
 			currLength -= uint64(dataRead)
