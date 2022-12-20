@@ -1296,7 +1296,7 @@ func pullHash(
 
 		return puller.Pull(ctx)
 	} else {
-		return pull.Pull(ctx, srcCS, destCS, waf, targetHashes, progChan)
+		return fmt.Errorf("Database must implement TableFileStore")
 	}
 }
 

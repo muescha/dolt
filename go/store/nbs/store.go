@@ -1178,10 +1178,7 @@ func (nbs *NomsBlockStore) Sources(ctx context.Context) (hash.Hash, []chunks.Tab
 		return hash.Hash{}, nil, nil, nil
 	}
 
-	css, err := nbs.chunkSourcesByAddr()
-	if err != nil {
-		return hash.Hash{}, nil, nil, err
-	}
+	css := nbs.chunkSourcesByAddr()
 
 	appendixTableFiles, err := getTableFiles(css, contents, contents.NumAppendixSpecs(), func(mc manifestContents, idx int) tableSpec {
 		return mc.getAppendixSpec(idx)
@@ -1243,11 +1240,7 @@ func (nbs *NomsBlockStore) Size(ctx context.Context) (uint64, error) {
 		return uint64(0), nil
 	}
 
-	css, err := nbs.chunkSourcesByAddr()
-	if err != nil {
-		return uint64(0), err
-	}
-
+	css := nbs.chunkSourcesByAddr()
 	numSpecs := contents.NumTableSpecs()
 
 	size := uint64(0)
@@ -1262,7 +1255,7 @@ func (nbs *NomsBlockStore) Size(ctx context.Context) (uint64, error) {
 	return size, nil
 }
 
-func (nbs *NomsBlockStore) chunkSourcesByAddr() (map[addr]chunkSource, error) {
+func (nbs *NomsBlockStore) chunkSourcesByAddr() map[addr]chunkSource {
 	css := make(map[addr]chunkSource, len(nbs.tables.upstream)+len(nbs.tables.novel))
 	for _, cs := range nbs.tables.upstream {
 		css[cs.hash()] = cs
@@ -1270,8 +1263,7 @@ func (nbs *NomsBlockStore) chunkSourcesByAddr() (map[addr]chunkSource, error) {
 	for _, cs := range nbs.tables.novel {
 		css[cs.hash()] = cs
 	}
-	return css, nil
-
+	return css
 }
 
 func (nbs *NomsBlockStore) SupportedOperations() chunks.TableFileStoreOps {

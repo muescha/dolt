@@ -37,10 +37,11 @@ import (
 // NewView(), allowing them to implement the transaction-style semantics that
 // ChunkStore requires.
 type MemoryStorage struct {
-	data     map[hash.Hash]Chunk
-	rootHash hash.Hash
-	mu       sync.RWMutex
-	version  string
+	data       map[hash.Hash]Chunk
+	tableFiles map[string]*MemoryStoreTableFile
+	rootHash   hash.Hash
+	mu         sync.RWMutex
+	version    string
 }
 
 // NewView vends a MemoryStoreView backed by this MemoryStorage. It's
@@ -99,7 +100,7 @@ func (ms *MemoryStorage) Root(ctx context.Context) hash.Hash {
 	return ms.rootHash
 }
 
-// Update checks the "persisted" root against last and, iff it matches,
+// Update checks the "persisted" root against last and, if it matches,
 // updates the root to current, adds all of novel to ms.data, and returns
 // true. Otherwise returns false.
 func (ms *MemoryStorage) Update(current, last hash.Hash, novel map[hash.Hash]Chunk) bool {
@@ -129,9 +130,11 @@ type MemoryStoreView struct {
 	mu       sync.RWMutex
 	version  string
 
+	// tableFiles map[string]*MemoryStoreTableFile
 	storage *MemoryStorage
 }
 
+var _ TableFileStore = &MemoryStoreView{}
 var _ ChunkStore = &MemoryStoreView{}
 var _ ChunkStoreGarbageCollector = &MemoryStoreView{}
 

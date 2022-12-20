@@ -52,7 +52,7 @@ type TableFileStore interface {
 	// and a second list containing only appendix table files.
 	Sources(ctx context.Context) (hash.Hash, []TableFile, []TableFile, error)
 
-	// Size  returns the total size, in bytes, of the table files in this Store.
+	// Size returns the total size, in bytes, of the table files in this Store.
 	Size(ctx context.Context) (uint64, error)
 
 	// WriteTableFile will read a table file from the provided reader and write it to the TableFileStore.
